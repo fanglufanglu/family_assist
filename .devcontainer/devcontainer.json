@@ -1,0 +1,14 @@
+{
+  "name": "亲情帮帮 Relay",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "forwardPorts": [8787],
+  "portsAttributes": {
+    "8787": {
+      "label": "亲情帮帮 relay",
+      "protocol": "http",
+      "visibility": "public",
+      "onAutoForward": "notify"
+    }
+  },
+  "postAttachCommand": "bash scripts/start-codespaces-relay.sh"
+}

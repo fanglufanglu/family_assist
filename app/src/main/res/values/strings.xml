@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">亲情帮帮</string>
+    <string name="accessibility_service_description">检测支付、银行、验证码等敏感页面，并在协助时自动遮罩家属端画面。</string>
+</resources>
