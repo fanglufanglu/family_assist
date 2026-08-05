@@ -143,6 +143,7 @@ const server = http.createServer(async (req, res) => {
       });
       family.inviteCode = "";
       family.inviteExpiresAt = 0;
+      family.updatedAt = new Date().toISOString();
       sendJson(res, 200, { ok: true, authToken });
       return;
     }
