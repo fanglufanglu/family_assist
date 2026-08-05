@@ -21,9 +21,9 @@ final class AnnotationView extends View {
         super(context);
         circlePaint.setColor(Color.rgb(220, 38, 38));
         circlePaint.setStyle(Paint.Style.STROKE);
-        circlePaint.setStrokeWidth(8f);
+        circlePaint.setStrokeWidth(14f);
 
-        fillPaint.setColor(Color.argb(42, 220, 38, 38));
+        fillPaint.setColor(Color.argb(82, 220, 38, 38));
         fillPaint.setStyle(Paint.Style.FILL);
 
         textPaint.setColor(Color.WHITE);
@@ -35,7 +35,7 @@ final class AnnotationView extends View {
     void setAnnotation(float normalizedX, float normalizedY, float normalizedRadius, String text) {
         x = normalizedX;
         y = normalizedY;
-        radius = Math.max(0.04f, normalizedRadius);
+        radius = Math.max(0.065f, normalizedRadius);
         label = text == null || text.isEmpty() ? "请点这里" : text;
         invalidate();
     }

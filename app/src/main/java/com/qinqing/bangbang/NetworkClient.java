@@ -69,8 +69,8 @@ final class NetworkClient {
     private static HttpURLConnection open(String baseUrl, String path, String method, String contentType) throws Exception {
         URL url = new URL(normalizeBaseUrl(baseUrl) + path);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setConnectTimeout(5000);
-        conn.setReadTimeout(7000);
+        conn.setConnectTimeout(2000);
+        conn.setReadTimeout(2500);
         conn.setRequestMethod(method);
         conn.setRequestProperty("Accept", "application/json");
         if (contentType != null) {

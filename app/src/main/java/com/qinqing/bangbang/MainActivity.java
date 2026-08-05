@@ -3,6 +3,9 @@ package com.qinqing.bangbang;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -42,7 +45,9 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_CAPTURE = 2001;
+    private static final int NOTIFICATION_CONTROL_REQUEST = 3001;
     private static final String PREFS = "family-assist";
+    private static final String CHANNEL_CONTROL = "control_requests";
     private static final String DEFAULT_RELAY_URL = "https://super-duper-funicular-44776x6g7hjvwj-8787.app.github.dev";
     private static final String DEFAULT_PAIR_CODE = "family001";
     private static final long FRESH_FRAME_MS = 2500;
@@ -69,6 +74,7 @@ public class MainActivity extends Activity {
     private boolean elderScreenVisible;
     private boolean refreshElderOnResume;
     private boolean remotePromptShowing;
+    private boolean appInForeground;
     private boolean familyPollInFlight;
     private boolean familyControlAllowed;
     private boolean rtcVideoReady;
@@ -102,6 +108,7 @@ public class MainActivity extends Activity {
             prefs.edit().putString("deviceId", deviceId).apply();
         }
         seedDefaultSafetyPrefs();
+        createControlNotificationChannel();
         showSetup();
     }
 
@@ -118,10 +125,22 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        appInForeground = true;
+        String pendingControl = prefs.getString("pendingControlRequestAt", "");
+        if (!pendingControl.isEmpty()) {
+            prefs.edit().remove("pendingControlRequestAt").apply();
+            main.postDelayed(() -> showRemoteControlPrompt(pendingControl), 250);
+        }
         if (refreshElderOnResume && elderScreenVisible) {
             refreshElderOnResume = false;
             main.postDelayed(this::showElder, 200);
         }
+    }
+
+    @Override
+    protected void onPause() {
+        appInForeground = false;
+        super.onPause();
     }
 
     @Override
@@ -262,7 +281,7 @@ public class MainActivity extends Activity {
         helpButton.setEnabled(!assisting);
         helpButton.setAlpha(assisting ? 0.62f : 1f);
         Button stopButton = dangerButton("停止协助");
-        Button safetyButton = secondaryButton("安全与权限设置");
+        Button safetyButton = secondaryButton("更多设置");
         Button backButton = secondaryButton("返回首页");
 
         helpButton.setOnClickListener(v -> handleElderPrimaryAction());
@@ -291,7 +310,9 @@ public class MainActivity extends Activity {
         root.addView(stepsCard);
 
         root.addView(status);
-        root.addView(stopButton);
+        if (assisting) {
+            root.addView(stopButton);
+        }
         root.addView(safetyButton);
         root.addView(backButton);
         setContentView(scroll(root));
@@ -875,32 +896,71 @@ public class MainActivity extends Activity {
                 JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
                 JSONObject family = result.optJSONObject("family");
                 if (family != null && family.optBoolean("controlRequested", false) && !prefs.getBoolean("remoteControlAllowed", false)) {
-                    main.post(() -> showRemoteControlPrompt());
+                    String updatedAt = family.optString("controlUpdatedAt", "");
+                    String handledAt = prefs.getString("handledControlRequestAt", "");
+                    if (!updatedAt.isEmpty() && !updatedAt.equals(handledAt)) {
+                        main.post(() -> handleRemoteControlRequest(updatedAt));
+                    }
                 }
             } catch (Exception ignored) {
             }
         });
     }
 
-    private void showRemoteControlPrompt() {
+    private void handleRemoteControlRequest(String updatedAt) {
+        if (!appInForeground) {
+            prefs.edit()
+                    .putString("pendingControlRequestAt", updatedAt)
+                    .putString("handledControlRequestAt", updatedAt)
+                    .apply();
+            showControlRequestNotification();
+            return;
+        }
+        showRemoteControlPrompt(updatedAt);
+    }
+
+    private void showRemoteControlPrompt(String updatedAt) {
         if (remotePromptShowing || isFinishing()) {
             return;
         }
         remotePromptShowing = true;
+        boolean accessibilityReady = isAccessibilityServiceEnabled();
         new AlertDialog.Builder(this)
                 .setTitle("家属想远程帮你点击")
-                .setMessage("允许后，家属点屏幕时会直接帮你点。协助结束后会自动关闭。")
-                .setPositiveButton("允许本次协助", (dialog, which) -> {
+                .setMessage(accessibilityReady
+                        ? "允许后，家属点屏幕时会直接帮你点。协助结束后会自动关闭。"
+                        : "远程点击需要先开启辅助服务。不会开启也没关系，家属仍然可以用红圈提示你。")
+                .setPositiveButton(accessibilityReady ? "允许本次协助" : "去开启辅助服务", (dialog, which) -> {
                     remotePromptShowing = false;
-                    allowRemoteControl(true);
-                    showElder();
+                    markControlRequestHandled(updatedAt);
+                    if (accessibilityReady) {
+                        allowRemoteControl(true);
+                        showElder();
+                    } else {
+                        allowRemoteControl(false);
+                        refreshElderOnResume = true;
+                        elderScreenVisible = true;
+                        startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                    }
                 })
                 .setNegativeButton("暂不允许", (dialog, which) -> {
                     remotePromptShowing = false;
+                    markControlRequestHandled(updatedAt);
                     allowRemoteControl(false);
                 })
-                .setOnCancelListener(dialog -> remotePromptShowing = false)
+                .setOnCancelListener(dialog -> {
+                    remotePromptShowing = false;
+                    markControlRequestHandled(updatedAt);
+                    allowRemoteControl(false);
+                })
                 .show();
+    }
+
+    private void markControlRequestHandled(String updatedAt) {
+        prefs.edit()
+                .putString("handledControlRequestAt", updatedAt)
+                .remove("pendingControlRequestAt")
+                .apply();
     }
 
     private void saveSetup(EditText serverInput, EditText codeInput, EditText nameInput) {
@@ -1138,6 +1198,49 @@ public class MainActivity extends Activity {
             window.getDecorView().setSystemUiVisibility(
                     View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
             );
+        }
+    }
+
+    private void createControlNotificationChannel() {
+        if (Build.VERSION.SDK_INT < 26) {
+            return;
+        }
+        NotificationChannel channel = new NotificationChannel(
+                CHANNEL_CONTROL,
+                "协助授权提醒",
+                NotificationManager.IMPORTANCE_HIGH
+        );
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.createNotificationChannel(channel);
+        }
+    }
+
+    private void showControlRequestNotification() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                intent,
+                Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE : PendingIntent.FLAG_UPDATE_CURRENT
+        );
+        android.app.Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                ? new android.app.Notification.Builder(this, CHANNEL_CONTROL)
+                : new android.app.Notification.Builder(this);
+        android.app.Notification notification = builder
+                .setContentTitle("家属请求远程点击")
+                .setContentText("点这里回到亲情帮帮，确认是否允许本次协助。")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .build();
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.notify(NOTIFICATION_CONTROL_REQUEST, notification);
         }
     }
 
