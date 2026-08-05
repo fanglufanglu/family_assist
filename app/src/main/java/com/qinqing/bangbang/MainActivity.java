@@ -8,6 +8,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Bitmap;
+import android.graphics.drawable.Drawable;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.projection.MediaProjectionManager;
@@ -106,19 +107,19 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         root = verticalRoot();
 
-        root.addView(hero("亲情帮帮", "看得见爸妈手机，远程画圈教操作"));
+        root.addView(hero("亲情帮帮", "爸妈点一下，家人看屏幕帮忙"));
         root.addView(statusPill(bindingStatusText()));
 
         EditText serverInput = input("例如 https://xxxx-8787.app.github.dev", baseUrl);
         EditText codeInput = input("家庭码，例如 family001", pairCode);
         EditText nameInput = input("显示名称，例如 妈妈 / 女儿", displayName);
         EditText inviteInput = input("家属输入长辈给的 6 位绑定码", "");
-        status = notice("先设置 Relay 地址和家庭码，再完成亲属绑定。");
+        status = notice("第一次使用：两台手机填写同一个 Relay 地址和家庭码，然后完成亲属绑定。");
 
         Button inviteButton = primaryButton("生成长辈绑定码");
         Button bindButton = secondaryButton("绑定这位长辈");
-        Button elderButton = primaryButton("进入长辈模式");
-        Button familyButton = secondaryButton("进入家属模式");
+        Button elderButton = primaryButton("我是长辈，需要家人帮忙");
+        Button familyButton = secondaryButton("我是家属，去帮长辈");
 
         inviteButton.setOnClickListener(v -> {
             saveSetup(serverInput, codeInput, nameInput);
@@ -137,7 +138,12 @@ public class MainActivity extends Activity {
             showFamily();
         });
 
-        LinearLayout connectionCard = card("连接设置", "两台手机填写同一个 Relay 地址和家庭码。");
+        LinearLayout roleCard = card("先选择身份", "长辈只需要记住蓝色按钮；家属负责配置和绑定。");
+        roleCard.addView(elderButton);
+        roleCard.addView(familyButton);
+        root.addView(roleCard);
+
+        LinearLayout connectionCard = card("准备连接", "两台手机填写同一个 Relay 地址和家庭码。");
         connectionCard.addView(label("Relay 地址"));
         connectionCard.addView(serverInput);
         connectionCard.addView(label("家庭码"));
@@ -154,8 +160,6 @@ public class MainActivity extends Activity {
         root.addView(bindCard);
 
         root.addView(status);
-        root.addView(elderButton);
-        root.addView(familyButton);
         setContentView(scroll(root));
     }
 
@@ -163,14 +167,14 @@ public class MainActivity extends Activity {
         familyPolling = false;
         elderAnnotationPolling = true;
         root = verticalRoot();
-        root.addView(hero("长辈模式", "需要帮忙时，只点一个按钮"));
+        root.addView(hero("长辈模式", "需要帮忙时，只点下面蓝色按钮"));
         root.addView(statusPill(bindingStatusText()));
         status = notice("尚未发起协助。家属不能主动进入你的手机。");
 
         Button helpButton = primaryButton("找家人帮忙");
         helpButton.setTextSize(24);
         Button privacyButton = secondaryButton(privacyButtonText());
-        Button overlayButton = secondaryButton("开启画圈浮层");
+        Button overlayButton = secondaryButton("允许家属画圈提示");
         Button accessibilityButton = secondaryButton("开启敏感页面自动检测");
         Button stopButton = dangerButton("停止协助");
         Button backButton = secondaryButton("返回设置");
@@ -197,6 +201,9 @@ public class MainActivity extends Activity {
 
         root.addView(helpButton);
 
+        LinearLayout stepsCard = card("接下来会发生什么", "1. 点“找家人帮忙”。\n2. 允许屏幕共享。\n3. 家属看到屏幕后，会用红圈告诉你点哪里。");
+        root.addView(stepsCard);
+
         LinearLayout safetyCard = card("隐私保护", "遇到验证码、支付、银行卡页面时，家属端会看到保护画面。");
         safetyCard.addView(privacyButton);
         safetyCard.addView(accessibilityButton);
@@ -217,11 +224,12 @@ public class MainActivity extends Activity {
         familyPolling = true;
         elderAnnotationPolling = false;
         root = verticalRoot();
-        root.addView(hero("家属模式", "看屏幕，点一下，长辈那边会出现红圈"));
+        root.addView(hero("家属模式", "看屏幕，点一下给长辈画圈"));
         root.addView(statusPill(bindingStatusText()));
-        status = notice("正在等待长辈发起协助...");
+        status = notice("正在等待长辈发起协助。看到屏幕后，点需要长辈点击的位置。");
         frameView = new ImageView(this);
         frameView.setAdjustViewBounds(true);
+        frameView.setScaleType(ImageView.ScaleType.FIT_CENTER);
         frameView.setBackground(rounded(0xFFF3F6FA, dp(18), COLOR_LINE));
         frameView.setPadding(dp(8), dp(8), dp(8), dp(8));
         frameView.setMinimumHeight(dp(320));
@@ -231,8 +239,9 @@ public class MainActivity extends Activity {
         ));
         frameView.setOnTouchListener((view, event) -> {
             if (event.getAction() == MotionEvent.ACTION_UP && frameView.getDrawable() != null) {
-                float x = Math.max(0f, Math.min(1f, event.getX() / Math.max(1, frameView.getWidth())));
-                float y = Math.max(0f, Math.min(1f, event.getY() / Math.max(1, frameView.getHeight())));
+                float[] point = normalizedImagePoint(frameView, event.getX(), event.getY());
+                float x = point[0];
+                float y = point[1];
                 sendAnnotation(x, y);
                 return true;
             }
@@ -263,6 +272,9 @@ public class MainActivity extends Activity {
         }
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 100);
+        }
+        if (!ensureOverlayReady()) {
+            return;
         }
         setStatus("正在发送协助请求...");
         io.execute(() -> {
@@ -367,7 +379,7 @@ public class MainActivity extends Activity {
             return;
         }
         pollFamilyOnce();
-        main.postDelayed(this::pollFamilyLoop, 2000);
+        main.postDelayed(this::pollFamilyLoop, 750);
     }
 
     private void pollFamilyOnce() {
@@ -415,12 +427,34 @@ public class MainActivity extends Activity {
         });
     }
 
+    private float[] normalizedImagePoint(ImageView imageView, float touchX, float touchY) {
+        Drawable drawable = imageView.getDrawable();
+        if (drawable == null) {
+            return new float[]{0.5f, 0.5f};
+        }
+        int viewWidth = Math.max(1, imageView.getWidth() - imageView.getPaddingLeft() - imageView.getPaddingRight());
+        int viewHeight = Math.max(1, imageView.getHeight() - imageView.getPaddingTop() - imageView.getPaddingBottom());
+        int imageWidth = Math.max(1, drawable.getIntrinsicWidth());
+        int imageHeight = Math.max(1, drawable.getIntrinsicHeight());
+        float scale = Math.min(viewWidth / (float) imageWidth, viewHeight / (float) imageHeight);
+        float displayedWidth = imageWidth * scale;
+        float displayedHeight = imageHeight * scale;
+        float left = imageView.getPaddingLeft() + (viewWidth - displayedWidth) / 2f;
+        float top = imageView.getPaddingTop() + (viewHeight - displayedHeight) / 2f;
+        float x = (touchX - left) / Math.max(1f, displayedWidth);
+        float y = (touchY - top) / Math.max(1f, displayedHeight);
+        return new float[]{
+                Math.max(0f, Math.min(1f, x)),
+                Math.max(0f, Math.min(1f, y))
+        };
+    }
+
     private void pollElderAnnotationLoop() {
         if (!elderAnnotationPolling) {
             return;
         }
         pollElderAnnotationOnce();
-        main.postDelayed(this::pollElderAnnotationLoop, 2000);
+        main.postDelayed(this::pollElderAnnotationLoop, 750);
     }
 
     private void pollElderAnnotationOnce() {
@@ -455,17 +489,32 @@ public class MainActivity extends Activity {
     }
 
     private void enableAnnotationOverlay() {
+        if (!ensureOverlayPermission()) {
+            return;
+        }
+        startService(new Intent(this, AnnotationOverlayService.class));
+        setStatus("画圈提示已开启。家属点屏幕后，你这里会出现红圈。");
+    }
+
+    private boolean ensureOverlayReady() {
+        if (!ensureOverlayPermission()) {
+            return false;
+        }
+        startService(new Intent(this, AnnotationOverlayService.class));
+        return true;
+    }
+
+    private boolean ensureOverlayPermission() {
         if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) {
             Intent intent = new Intent(
                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                     Uri.parse("package:" + getPackageName())
             );
             startActivity(intent);
-            setStatus("请允许悬浮窗权限，回来后再点一次“开启画圈浮层”。");
-            return;
+            setStatus("请先允许“显示在其他应用上层”。打开后回来再点“找家人帮忙”。");
+            return false;
         }
-        startService(new Intent(this, AnnotationOverlayService.class));
-        setStatus("画圈浮层已开启。家属点截图后，你的屏幕会出现红圈提示。");
+        return true;
     }
 
     private boolean ensureBound(String expectedRoleLabel) {

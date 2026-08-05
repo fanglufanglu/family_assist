@@ -33,29 +33,19 @@ public class GenerateLogoAssets {
         g.setPaint(new GradientPaint(120f * (float) s, 90f * (float) s, c(0xff7a59), 900f * (float) s, 930f * (float) s, c(0x2f80ed)));
         g.fill(new RoundRectangle2D.Double(0, 0, size, size, 232 * s, 232 * s));
 
-        GeneralPath heart = new GeneralPath();
-        heart.moveTo(512 * s, 824 * s);
-        heart.curveTo(352 * s, 749 * s, 254 * s, 629 * s, 254 * s, 462 * s);
-        heart.curveTo(254 * s, 350 * s, 335 * s, 262 * s, 441 * s, 262 * s);
-        heart.curveTo(478 * s, 262 * s, 512 * s, 274 * s, 540 * s, 297 * s);
-        heart.curveTo(568 * s, 274 * s, 602 * s, 262 * s, 639 * s, 262 * s);
-        heart.curveTo(745 * s, 262 * s, 826 * s, 350 * s, 826 * s, 462 * s);
-        heart.curveTo(826 * s, 629 * s, 728 * s, 749 * s, 568 * s, 824 * s);
-        heart.curveTo(550 * s, 832 * s, 530 * s, 832 * s, 512 * s, 824 * s);
-        heart.closePath();
         g.setColor(c(0xfff7ed));
-        g.fill(heart);
+        g.fill(new Ellipse2D.Double(214 * s, 214 * s, 596 * s, 596 * s));
 
-        drawPhone(g, 312 * s, 360 * s, 188 * s, 292 * s, 48 * s, c(0x2563eb), c(0xdbeafe));
-        drawPhone(g, 524 * s, 360 * s, 188 * s, 292 * s, 48 * s, c(0xef4444), c(0xffe4e6));
+        drawPhone(g, 300 * s, 352 * s, 200 * s, 320 * s, 50 * s, c(0x2563eb), c(0xdbeafe));
+        drawPhone(g, 524 * s, 352 * s, 200 * s, 320 * s, 50 * s, c(0xef4444), c(0xffe4e6));
 
         g.setColor(c(0xfff7ed));
-        g.fill(new RoundRectangle2D.Double(476 * s, 468 * s, 72 * s, 96 * s, 36 * s, 36 * s));
+        g.fill(new RoundRectangle2D.Double(472 * s, 462 * s, 80 * s, 116 * s, 40 * s, 40 * s));
 
         g.setColor(c(0x12b981));
-        g.fill(new Ellipse2D.Double(462 * s, 460 * s, 100 * s, 100 * s));
+        g.fill(new Ellipse2D.Double(454 * s, 450 * s, 116 * s, 116 * s));
         g.setColor(Color.WHITE);
-        g.fill(new Ellipse2D.Double(492 * s, 490 * s, 40 * s, 40 * s));
+        g.fill(new Ellipse2D.Double(494 * s, 490 * s, 36 * s, 36 * s));
         g.dispose();
         return image;
     }
