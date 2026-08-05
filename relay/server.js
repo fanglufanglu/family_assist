@@ -423,7 +423,7 @@ const server = http.createServer(async (req, res) => {
         label: String(payload.label || "请点这里"),
         frameUpdatedAt: String(payload.frameUpdatedAt || ""),
         updatedAt: new Date().toISOString(),
-        expiresAt: Date.now() + 3500,
+        expiresAt: Date.now() + 6500,
       };
       sendJson(res, 200, { ok: true, annotation: result.family.annotation });
       return;

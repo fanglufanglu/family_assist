@@ -19,7 +19,7 @@ import java.util.concurrent.Executors;
 
 public class AnnotationOverlayService extends Service {
     private static final String PREFS = "family-assist";
-    private static final long ANNOTATION_VISIBLE_MS = 3500;
+    private static final long ANNOTATION_VISIBLE_MS = 6500;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private AnnotationView annotationView;
