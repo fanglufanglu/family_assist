@@ -38,6 +38,10 @@ public class WebRtcScreenService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         showForeground("正在建立实时屏幕连接");
+        if (intent == null) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA);
         baseUrl = intent.getStringExtra(EXTRA_BASE_URL);
         pairCode = intent.getStringExtra(EXTRA_PAIR_CODE);
@@ -61,7 +65,7 @@ public class WebRtcScreenService extends Service {
         }
         monitoring = true;
         main.post(monitorLoop);
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
     private final Runnable monitorLoop = new Runnable() {
