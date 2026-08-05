@@ -6,7 +6,12 @@ import android.app.Service;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.IBinder;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class WebRtcScreenService extends Service {
     static final String EXTRA_BASE_URL = "baseUrl";
@@ -16,20 +21,27 @@ public class WebRtcScreenService extends Service {
 
     private static final String CHANNEL_ID = "webrtc_screen";
     private WebRtcClient client;
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final ExecutorService monitorIo = Executors.newSingleThreadExecutor();
+    private boolean monitoring;
+    private String baseUrl;
+    private String pairCode;
+    private String authToken;
 
     @Override
     public void onCreate() {
         super.onCreate();
         createChannel();
+        AssistNotifier.createControlChannel(this);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         showForeground("正在建立实时屏幕连接");
         Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA);
-        String baseUrl = intent.getStringExtra(EXTRA_BASE_URL);
-        String pairCode = intent.getStringExtra(EXTRA_PAIR_CODE);
-        String authToken = intent.getStringExtra(EXTRA_AUTH_TOKEN);
+        baseUrl = intent.getStringExtra(EXTRA_BASE_URL);
+        pairCode = intent.getStringExtra(EXTRA_PAIR_CODE);
+        authToken = intent.getStringExtra(EXTRA_AUTH_TOKEN);
         if (resultData == null || baseUrl == null || pairCode == null || authToken == null) {
             stopSelf();
             return START_NOT_STICKY;
@@ -47,8 +59,21 @@ public class WebRtcScreenService extends Service {
             });
             client.startElder(resultData);
         }
+        monitoring = true;
+        main.post(monitorLoop);
         return START_STICKY;
     }
+
+    private final Runnable monitorLoop = new Runnable() {
+        @Override
+        public void run() {
+            if (!monitoring) {
+                return;
+            }
+            monitorIo.execute(() -> AssistNotifier.pollControlRequest(WebRtcScreenService.this, baseUrl, pairCode, authToken));
+            main.postDelayed(this, 1500);
+        }
+    };
 
     private void showForeground(String text) {
         Notification notification = buildNotification(text);
@@ -61,10 +86,12 @@ public class WebRtcScreenService extends Service {
 
     @Override
     public void onDestroy() {
+        monitoring = false;
         if (client != null) {
             client.stop();
             client = null;
         }
+        monitorIo.shutdownNow();
         super.onDestroy();
     }
 

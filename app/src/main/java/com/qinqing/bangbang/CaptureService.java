@@ -49,11 +49,13 @@ public class CaptureService extends Service {
     private String baseUrl;
     private String pairCode;
     private String authToken;
+    private long lastControlCheckMs;
 
     @Override
     public void onCreate() {
         super.onCreate();
         createChannel();
+        AssistNotifier.createControlChannel(this);
         workerThread = new HandlerThread("capture-worker");
         workerThread.start();
         worker = new Handler(workerThread.getLooper());
@@ -141,9 +143,19 @@ public class CaptureService extends Service {
         @Override
         public void run() {
             captureAndUpload();
+            maybePollControlRequest();
             worker.postDelayed(this, 520);
         }
     };
+
+    private void maybePollControlRequest() {
+        long now = System.currentTimeMillis();
+        if (now - lastControlCheckMs < 1500) {
+            return;
+        }
+        lastControlCheckMs = now;
+        AssistNotifier.pollControlRequest(this, baseUrl, pairCode, authToken);
+    }
 
     private void captureAndUpload() {
         Image image = null;

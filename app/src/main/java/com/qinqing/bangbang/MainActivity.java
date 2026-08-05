@@ -6,6 +6,7 @@ import android.app.AlertDialog;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -57,7 +58,7 @@ public class MainActivity extends Activity {
     private static final long HELP_CONNECT_TIMEOUT_MS = 90_000;
     private static final long ACTION_BUTTON_RESET_MS = 1800;
     private static final long ANNOTATION_THROTTLE_MS = 850;
-    private static final boolean USE_WEBRTC = false;
+    private static final boolean USE_WEBRTC = true;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService statusIo = Executors.newSingleThreadExecutor();
@@ -169,10 +170,18 @@ public class MainActivity extends Activity {
                     .putLong("assistStartedAtMs", System.currentTimeMillis())
                     .apply();
             ensureOverlayReady();
-            startCaptureService(resultCode, data);
-            publishHelpRequest();
-            showElder();
-            setStatus("协助已开始，家属正在连接。需要结束时点“停止协助”。");
+            if (USE_WEBRTC) {
+                publishHelpRequest(() -> {
+                    startCaptureService(resultCode, data);
+                    showElder();
+                    setStatus("实时协助已开始，家属正在连接。需要结束时点“停止协助”。");
+                });
+            } else {
+                startCaptureService(resultCode, data);
+                publishHelpRequest();
+                showElder();
+                setStatus("协助已开始，家属正在连接。需要结束时点“停止协助”。");
+            }
         } else if (requestCode == REQUEST_CAPTURE) {
             prefs.edit().putBoolean("assistActive", false).apply();
             endHelpRequest();
@@ -399,7 +408,7 @@ public class MainActivity extends Activity {
         accessibilityButton.setOnClickListener(v -> {
             refreshElderOnResume = true;
             elderScreenVisible = true;
-            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            openAccessibilityServiceSettings();
         });
         backButton.setOnClickListener(v -> showElder());
 
@@ -577,6 +586,10 @@ public class MainActivity extends Activity {
     }
 
     private void publishHelpRequest() {
+        publishHelpRequest(null);
+    }
+
+    private void publishHelpRequest(Runnable afterSuccess) {
         statusIo.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
@@ -586,6 +599,9 @@ public class MainActivity extends Activity {
                         .put("deviceName", Build.MANUFACTURER + " " + Build.MODEL)
                         .put("masked", isPrivacyMasked());
                 NetworkClient.postJson(baseUrl, "/api/help", payload);
+                if (afterSuccess != null) {
+                    main.post(afterSuccess);
+                }
             } catch (Exception e) {
                 main.post(() -> setStatus("发送失败：" + e.getMessage()));
             }
@@ -1030,7 +1046,6 @@ public class MainActivity extends Activity {
         if (!appInForeground) {
             prefs.edit()
                     .putString("pendingControlRequestAt", updatedAt)
-                    .putString("handledControlRequestAt", updatedAt)
                     .apply();
             showControlRequestNotification();
             return;
@@ -1048,7 +1063,7 @@ public class MainActivity extends Activity {
                 .setTitle("家属想远程帮你点击")
                 .setMessage(accessibilityReady
                         ? "允许后，家属点屏幕时会直接帮你点。协助结束后会自动关闭。"
-                        : "远程点击需要先开启辅助服务。不会开启也没关系，家属仍然可以用红圈提示你。")
+                        : "远程点击需要先开启“亲情帮帮”辅助服务。点下面按钮后会尽量直接打开亲情帮帮的开关页。")
                 .setPositiveButton(accessibilityReady ? "允许本次协助" : "去开启辅助服务", (dialog, which) -> {
                     remotePromptShowing = false;
                     markControlRequestHandled(updatedAt);
@@ -1059,7 +1074,7 @@ public class MainActivity extends Activity {
                         allowRemoteControl(false);
                         refreshElderOnResume = true;
                         elderScreenVisible = true;
-                        startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                        openAccessibilityServiceSettings();
                     }
                 })
                 .setNegativeButton("暂不允许", (dialog, which) -> {
@@ -1150,7 +1165,7 @@ public class MainActivity extends Activity {
         if (isAccessibilityServiceEnabled()) {
             return true;
         }
-        startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        openAccessibilityServiceSettings();
         setStatus("首次准备：请开启“亲情帮帮”辅助服务，回来后再点“开始协助”。");
         return false;
     }
@@ -1225,10 +1240,22 @@ public class MainActivity extends Activity {
                 .setPositiveButton("去开启", (dialog, which) -> {
                     refreshElderOnResume = true;
                     elderScreenVisible = true;
-                    startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                    openAccessibilityServiceSettings();
                 })
                 .setNegativeButton("先不用", null)
                 .show();
+    }
+
+    private void openAccessibilityServiceSettings() {
+        ComponentName componentName = new ComponentName(this, SensitiveAccessibilityService.class);
+        Intent detailIntent = new Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS");
+        detailIntent.putExtra("android.provider.extra.ACCESSIBILITY_SERVICE_COMPONENT_NAME", componentName.flattenToString());
+        try {
+            startActivity(detailIntent);
+        } catch (Exception ignored) {
+            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            setStatus("请在列表里点“亲情帮帮”，打开开关后按返回键。");
+        }
     }
 
     private String migrateRelayUrl(String value) {
