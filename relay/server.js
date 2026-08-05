@@ -24,6 +24,16 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
+function logRequest(req, res, startedAt) {
+  const forwardedFor = req.headers["x-forwarded-for"] || "";
+  const remote = forwardedFor || req.socket.remoteAddress || "";
+  const userAgent = req.headers["user-agent"] || "";
+  const elapsedMs = Date.now() - startedAt;
+  console.log(
+    `${new Date().toISOString()} ${req.method} ${req.url} ${res.statusCode} ${elapsedMs}ms remote=${remote} ua="${userAgent}"`
+  );
+}
+
 function familyFor(pairCode) {
   if (!families.has(pairCode)) {
     families.set(pairCode, {
@@ -94,10 +104,12 @@ function requireMember(res, pairCode, authToken, role) {
 }
 
 const server = http.createServer(async (req, res) => {
+  const startedAt = Date.now();
+  res.on("finish", () => logRequest(req, res, startedAt));
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
-    if (req.method === "GET" && url.pathname === "/health") {
+    if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
       sendJson(res, 200, { ok: true });
       return;
     }

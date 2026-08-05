@@ -3,6 +3,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+if [[ "${1:-}" == "restart" ]]; then
+  pkill -f "node relay/server.js" >/dev/null 2>&1 || true
+fi
+
 if pgrep -f "node relay/server.js" >/dev/null 2>&1; then
   echo "亲情帮帮 relay is already running."
 else
