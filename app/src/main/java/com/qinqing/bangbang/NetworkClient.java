@@ -24,6 +24,10 @@ final class NetworkClient {
         return value;
     }
 
+    static String requestUrl(String baseUrl, String path) {
+        return normalizeBaseUrl(baseUrl) + path;
+    }
+
     static JSONObject postJson(String baseUrl, String path, JSONObject payload) throws Exception {
         byte[] bytes = payload.toString().getBytes(StandardCharsets.UTF_8);
         HttpURLConnection conn = open(baseUrl, path, "POST", "application/json");
@@ -67,7 +71,7 @@ final class NetworkClient {
     }
 
     private static HttpURLConnection open(String baseUrl, String path, String method, String contentType) throws Exception {
-        URL url = new URL(normalizeBaseUrl(baseUrl) + path);
+        URL url = new URL(requestUrl(baseUrl, path));
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setConnectTimeout(2000);
         conn.setReadTimeout(2500);
@@ -84,7 +88,7 @@ final class NetworkClient {
         InputStream source = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
         String body = readAll(source);
         if (code < 200 || code >= 300) {
-            throw new IllegalStateException("HTTP " + code + ": " + body);
+            throw new IllegalStateException("HTTP " + code + " " + conn.getURL() + ": " + body);
         }
         return body.isEmpty() ? new JSONObject() : new JSONObject(body);
     }

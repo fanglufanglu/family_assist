@@ -237,12 +237,17 @@ public class MainActivity extends Activity {
         EditText codeInput = input("家庭码", pairCode);
         EditText nameInput = input("我的显示名称", displayName);
         Button saveButton = primaryButton("保存设置");
+        Button testButton = secondaryButton("测试 Relay");
         Button webRtcButton = secondaryButton(webRtcButtonText());
         Button backButton = secondaryButton("返回首页");
 
         saveButton.setOnClickListener(v -> {
             saveSetup(serverInput, codeInput, nameInput);
             setStatus("设置已保存。");
+        });
+        testButton.setOnClickListener(v -> {
+            saveSetup(serverInput, codeInput, nameInput);
+            testRelayConnection(testButton);
         });
         webRtcButton.setOnClickListener(v -> {
             boolean next = !prefs.getBoolean("webRtcEnabled", false);
@@ -262,6 +267,7 @@ public class MainActivity extends Activity {
         connectionCard.addView(label("显示名称"));
         connectionCard.addView(nameInput);
         connectionCard.addView(saveButton);
+        connectionCard.addView(testButton);
         connectionCard.addView(webRtcButton);
         root.addView(connectionCard);
         root.addView(status);
@@ -646,7 +652,7 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 main.post(() -> {
                     restoreButton(sourceButton);
-                    setStatus("生成失败：" + e.getMessage());
+                    setStatus("生成失败：" + friendlyError(e));
                 });
             } finally {
                 inviteInProgress = false;
@@ -686,7 +692,7 @@ public class MainActivity extends Activity {
             } catch (Exception e) {
                 main.post(() -> {
                     restoreButton(sourceButton);
-                    setStatus("绑定失败：" + e.getMessage());
+                    setStatus("绑定失败：" + friendlyError(e));
                 });
             } finally {
                 bindInProgress = false;
@@ -1180,6 +1186,32 @@ public class MainActivity extends Activity {
                 .putString("pairCode", pairCode)
                 .putString("displayName", displayName)
                 .apply();
+    }
+
+    private void testRelayConnection(Button sourceButton) {
+        setButtonBusy(sourceButton, "测试中...");
+        setStatus("正在测试：" + NetworkClient.requestUrl(baseUrl, "/health"));
+        statusIo.execute(() -> {
+            try {
+                JSONObject result = NetworkClient.getJson(baseUrl, "/health");
+                main.post(() -> setStatus("Relay 正常：" + baseUrl + "，返回：" + result.toString()));
+            } catch (Exception e) {
+                main.post(() -> setStatus("Relay 测试失败：" + friendlyError(e)));
+            } finally {
+                main.post(() -> restoreButton(sourceButton));
+            }
+        });
+    }
+
+    private String friendlyError(Exception e) {
+        String message = e.getMessage();
+        if (message == null || message.isEmpty()) {
+            return e.getClass().getSimpleName();
+        }
+        if (message.length() > 180) {
+            return message.substring(0, 180) + "...";
+        }
+        return message;
     }
 
     private void enableAnnotationOverlay() {
