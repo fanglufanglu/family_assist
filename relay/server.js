@@ -36,6 +36,8 @@ function familyFor(pairCode) {
       updatedAt: "",
       frame: null,
       frameUpdatedAt: "",
+      lastFamilySeenAtMs: 0,
+      lastFamilySeenAt: "",
       masked: false,
       annotation: null,
       controlRequested: false,
@@ -69,6 +71,8 @@ function publicFamily(family) {
     deviceName: family.deviceName,
     updatedAt: family.updatedAt,
     frameUpdatedAt: family.frameUpdatedAt,
+    lastFamilySeenAtMs: family.lastFamilySeenAtMs,
+    lastFamilySeenAt: family.lastFamilySeenAt,
     masked: family.masked,
     controlRequested: family.controlRequested,
     controlAllowed: family.controlAllowed,
@@ -120,6 +124,8 @@ const server = http.createServer(async (req, res) => {
       family.controlAction = null;
       family.frame = null;
       family.frameUpdatedAt = "";
+      family.lastFamilySeenAtMs = 0;
+      family.lastFamilySeenAt = "";
       family.webrtc = {
         offer: null,
         answer: null,
@@ -186,6 +192,8 @@ const server = http.createServer(async (req, res) => {
       family.deviceName = String(payload.deviceName || "");
       family.masked = Boolean(payload.masked);
       family.updatedAt = new Date().toISOString();
+      family.lastFamilySeenAtMs = 0;
+      family.lastFamilySeenAt = "";
       family.webrtc = {
         offer: null,
         answer: null,
@@ -202,6 +210,8 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(url.searchParams.get("authToken") || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      result.family.lastFamilySeenAtMs = Date.now();
+      result.family.lastFamilySeenAt = new Date(result.family.lastFamilySeenAtMs).toISOString();
       sendJson(res, 200, publicFamily(result.family));
       return;
     }
@@ -217,6 +227,8 @@ const server = http.createServer(async (req, res) => {
       result.family.controlAllowed = false;
       result.family.controlRequested = false;
       result.family.controlAction = null;
+      result.family.lastFamilySeenAtMs = 0;
+      result.family.lastFamilySeenAt = "";
       result.family.updatedAt = new Date().toISOString();
       sendJson(res, 200, { ok: true });
       return;

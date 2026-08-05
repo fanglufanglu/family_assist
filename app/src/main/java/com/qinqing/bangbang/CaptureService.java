@@ -141,7 +141,7 @@ public class CaptureService extends Service {
         @Override
         public void run() {
             captureAndUpload();
-            worker.postDelayed(this, 280);
+            worker.postDelayed(this, 520);
         }
     };
 
@@ -165,7 +165,7 @@ public class CaptureService extends Service {
             Bitmap cropped = Bitmap.createBitmap(raw, 0, 0, width, height);
             raw.recycle();
 
-            int targetWidth = Math.min(480, cropped.getWidth());
+            int targetWidth = Math.min(420, cropped.getWidth());
             int targetHeight = Math.max(1, cropped.getHeight() * targetWidth / cropped.getWidth());
             Bitmap scaled = Bitmap.createScaledBitmap(cropped, targetWidth, targetHeight, true);
             cropped.recycle();
@@ -177,7 +177,7 @@ public class CaptureService extends Service {
             }
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            scaled.compress(Bitmap.CompressFormat.JPEG, 32, out);
+            scaled.compress(Bitmap.CompressFormat.JPEG, 28, out);
             scaled.recycle();
             String encodedPairCode = URLEncoder.encode(pairCode, StandardCharsets.UTF_8.name());
             String encodedAuthToken = URLEncoder.encode(authToken, StandardCharsets.UTF_8.name());

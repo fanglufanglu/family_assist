@@ -51,10 +51,17 @@ public class MainActivity extends Activity {
     private static final String DEFAULT_RELAY_URL = "https://super-duper-funicular-44776x6g7hjvwj-8787.app.github.dev";
     private static final String DEFAULT_PAIR_CODE = "family001";
     private static final long FRESH_FRAME_MS = 2500;
+    private static final long FAMILY_WAIT_POLL_MS = 1000;
+    private static final long FAMILY_ACTIVE_POLL_MS = 520;
+    private static final long ELDER_STATUS_POLL_MS = 900;
+    private static final long HELP_CONNECT_TIMEOUT_MS = 90_000;
+    private static final long ACTION_BUTTON_RESET_MS = 1800;
+    private static final long ANNOTATION_THROTTLE_MS = 850;
     private static final boolean USE_WEBRTC = false;
 
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private final ExecutorService statusIo = Executors.newSingleThreadExecutor();
+    private final ExecutorService mediaIo = Executors.newSingleThreadExecutor();
 
     private LinearLayout root;
     private SharedPreferences prefs;
@@ -76,8 +83,16 @@ public class MainActivity extends Activity {
     private boolean remotePromptShowing;
     private boolean appInForeground;
     private boolean familyPollInFlight;
+    private boolean familyFrameInFlight;
+    private boolean elderStatusInFlight;
     private boolean familyControlAllowed;
     private boolean rtcVideoReady;
+    private boolean familyLastActive;
+    private boolean captureRequestInProgress;
+    private boolean inviteInProgress;
+    private boolean bindInProgress;
+    private boolean remoteRequestInProgress;
+    private long lastAnnotationSentAtMs;
     private long lastFrameReceivedAtMs;
     private String lastFrameUpdatedAt = "";
 
@@ -118,7 +133,8 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         elderBindPolling = false;
         stopFamilyWebRtc();
-        io.shutdownNow();
+        statusIo.shutdownNow();
+        mediaIo.shutdownNow();
         super.onDestroy();
     }
 
@@ -146,8 +162,12 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        captureRequestInProgress = false;
         if (requestCode == REQUEST_CAPTURE && resultCode == RESULT_OK && data != null) {
-            prefs.edit().putBoolean("assistActive", true).apply();
+            prefs.edit()
+                    .putBoolean("assistActive", true)
+                    .putLong("assistStartedAtMs", System.currentTimeMillis())
+                    .apply();
             ensureOverlayReady();
             startCaptureService(resultCode, data);
             publishHelpRequest();
@@ -251,7 +271,7 @@ public class MainActivity extends Activity {
                     displayName = "长辈";
                 }
                 prefs.edit().putString("displayName", displayName).apply();
-                createInvite();
+                createInvite(inviteButton);
             });
             backButton.setOnClickListener(v -> {
                 elderAnnotationPolling = false;
@@ -285,18 +305,7 @@ public class MainActivity extends Activity {
         Button backButton = secondaryButton("返回首页");
 
         helpButton.setOnClickListener(v -> handleElderPrimaryAction());
-        stopButton.setOnClickListener(v -> {
-            stopService(new Intent(this, CaptureService.class));
-            stopService(new Intent(this, WebRtcScreenService.class));
-            stopService(new Intent(this, AnnotationOverlayService.class));
-            prefs.edit()
-                    .putBoolean("remoteControlAllowed", false)
-                    .putBoolean("assistActive", false)
-                    .apply();
-            endHelpRequest();
-            showElder();
-            setStatus("已停止协助。");
-        });
+        stopButton.setOnClickListener(v -> stopAssistance("已停止协助。"));
         safetyButton.setOnClickListener(v -> showSafetySettings());
         backButton.setOnClickListener(v -> {
             elderAnnotationPolling = false;
@@ -314,7 +323,9 @@ public class MainActivity extends Activity {
             root.addView(stopButton);
         }
         root.addView(safetyButton);
-        root.addView(backButton);
+        if (!assisting) {
+            root.addView(backButton);
+        }
         setContentView(scroll(root));
         pollElderAnnotationLoop();
     }
@@ -336,7 +347,7 @@ public class MainActivity extends Activity {
 
         Button regenerateButton = secondaryButton("重新生成绑定码");
         Button backButton = secondaryButton("返回首页");
-        regenerateButton.setOnClickListener(v -> createInvite());
+        regenerateButton.setOnClickListener(v -> createInvite(regenerateButton));
         backButton.setOnClickListener(v -> {
             elderBindPolling = false;
             elderScreenVisible = false;
@@ -423,8 +434,14 @@ public class MainActivity extends Activity {
         Button controlRequestButton = secondaryButton("请求远程点击授权");
         Button refreshButton = primaryButton("立即刷新");
         Button backButton = secondaryButton("返回首页");
-        controlRequestButton.setOnClickListener(v -> requestRemoteControl());
-        refreshButton.setOnClickListener(v -> pollFamilyOnce());
+        controlRequestButton.setOnClickListener(v -> requestRemoteControl(controlRequestButton));
+        refreshButton.setOnClickListener(v -> {
+            if (!refreshButton.isEnabled()) {
+                return;
+            }
+            temporarilyDisable(refreshButton, "刷新中...");
+            pollFamilyOnce();
+        });
         backButton.setOnClickListener(v -> {
             familyPolling = false;
             stopFamilyWebRtc();
@@ -524,7 +541,7 @@ public class MainActivity extends Activity {
                 displayName = "家属";
             }
             prefs.edit().putString("displayName", displayName).apply();
-            bindFamily(inviteInput.getText().toString().trim());
+            bindFamily(inviteInput.getText().toString().trim(), bindButton);
         });
         backButton.setOnClickListener(v -> showSetup());
 
@@ -541,6 +558,10 @@ public class MainActivity extends Activity {
     }
 
     private void requestHelpAndCapture() {
+        if (captureRequestInProgress) {
+            setStatus("正在打开屏幕共享授权，请稍等。");
+            return;
+        }
         if (!ensureBound("长辈")) {
             return;
         }
@@ -550,13 +571,13 @@ public class MainActivity extends Activity {
         if (!ensureOverlayReady()) {
             return;
         }
-        publishHelpRequest();
+        captureRequestInProgress = true;
         setStatus("正在打开屏幕共享授权...");
         requestScreenCapturePermission();
     }
 
     private void publishHelpRequest() {
-        io.execute(() -> {
+        statusIo.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
                         .put("pairCode", pairCode)
@@ -571,9 +592,14 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void createInvite() {
+    private void createInvite(Button sourceButton) {
+        if (inviteInProgress) {
+            return;
+        }
+        inviteInProgress = true;
+        setButtonBusy(sourceButton, "生成中...");
         setStatus("正在生成亲属绑定码...");
-        io.execute(() -> {
+        statusIo.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
                         .put("pairCode", pairCode)
@@ -592,18 +618,28 @@ public class MainActivity extends Activity {
                         .apply();
                 main.post(() -> showElderInvite(inviteCode));
             } catch (Exception e) {
-                main.post(() -> setStatus("生成失败：" + e.getMessage()));
+                main.post(() -> {
+                    restoreButton(sourceButton);
+                    setStatus("生成失败：" + e.getMessage());
+                });
+            } finally {
+                inviteInProgress = false;
             }
         });
     }
 
-    private void bindFamily(String inviteCode) {
+    private void bindFamily(String inviteCode, Button sourceButton) {
+        if (bindInProgress) {
+            return;
+        }
         if (inviteCode.isEmpty()) {
             setStatus("请先输入长辈给你的 6 位绑定码。");
             return;
         }
+        bindInProgress = true;
+        setButtonBusy(sourceButton, "绑定中...");
         setStatus("正在绑定长辈...");
-        io.execute(() -> {
+        statusIo.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
                         .put("pairCode", pairCode)
@@ -622,7 +658,12 @@ public class MainActivity extends Activity {
                     setStatus("绑定成功。正在等待长辈发起协助。");
                 });
             } catch (Exception e) {
-                main.post(() -> setStatus("绑定失败：" + e.getMessage()));
+                main.post(() -> {
+                    restoreButton(sourceButton);
+                    setStatus("绑定失败：" + e.getMessage());
+                });
+            } finally {
+                bindInProgress = false;
             }
         });
     }
@@ -655,7 +696,7 @@ public class MainActivity extends Activity {
 
     private void endHelpRequest() {
         prefs.edit().putBoolean("remoteControlAllowed", false).apply();
-        io.execute(() -> {
+        statusIo.execute(() -> {
             try {
                 NetworkClient.postJson(baseUrl, "/api/end", new JSONObject()
                         .put("pairCode", pairCode)
@@ -706,7 +747,7 @@ public class MainActivity extends Activity {
             return;
         }
         pollFamilyOnce();
-        main.postDelayed(this::pollFamilyLoop, 300);
+        main.postDelayed(this::pollFamilyLoop, familyLastActive ? FAMILY_ACTIVE_POLL_MS : FAMILY_WAIT_POLL_MS);
     }
 
     private void pollFamilyOnce() {
@@ -714,12 +755,13 @@ public class MainActivity extends Activity {
             return;
         }
         familyPollInFlight = true;
-        io.execute(() -> {
+        statusIo.execute(() -> {
             try {
                 String encoded = encoded(pairCode);
                 String token = encoded(authToken);
                 JSONObject help = NetworkClient.getJson(baseUrl, "/api/help?pairCode=" + encoded + "&authToken=" + token);
                 boolean active = help.optBoolean("active", false);
+                familyLastActive = active;
                 familyControlAllowed = help.optBoolean("controlAllowed", false);
                 if (!active) {
                     main.post(() -> setStatus("正在等待协助请求..."));
@@ -727,21 +769,20 @@ public class MainActivity extends Activity {
                 }
                 String elderName = help.optString("elderName", "长辈");
                 String updatedAt = help.optString("updatedAt", "");
-                Bitmap bitmap = null;
-                if (!USE_WEBRTC) {
-                    bitmap = NetworkClient.getJpeg(baseUrl, "/api/frame?pairCode=" + encoded + "&authToken=" + token + "&t=" + System.currentTimeMillis());
-                }
-                Bitmap latestBitmap = bitmap;
+                String frameUpdatedAt = help.optString("frameUpdatedAt", "");
                 main.post(() -> {
                     String controlText = familyControlAllowed ? "远程点击已授权。" : "未授权远程点击。";
-                    setStatus(elderName + " 正在请求协助。" + controlText + " 最后更新：" + updatedAt);
-                    lastFrameUpdatedAt = updatedAt;
-                    if (latestBitmap != null && frameView != null) {
-                        lastFrameReceivedAtMs = System.currentTimeMillis();
-                        frameView.setImageBitmap(latestBitmap);
+                    if (lastFrameReceivedAtMs == 0) {
+                        setStatus(elderName + " 已开始协助，正在接收第一张画面。" + controlText);
+                    } else {
+                        setStatus(elderName + " 正在协助中。" + controlText + " 最后更新：" + updatedAt);
                     }
                 });
+                if (!USE_WEBRTC) {
+                    requestLatestFrame(encoded, token, frameUpdatedAt);
+                }
             } catch (Exception e) {
+                familyLastActive = false;
                 main.post(() -> setStatus("连接 relay 失败：" + e.getMessage()));
             } finally {
                 familyPollInFlight = false;
@@ -749,9 +790,38 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void requestLatestFrame(String encodedPair, String encodedToken, String frameUpdatedAt) {
+        if (familyFrameInFlight || frameUpdatedAt.isEmpty() || frameUpdatedAt.equals(lastFrameUpdatedAt)) {
+            return;
+        }
+        familyFrameInFlight = true;
+        mediaIo.execute(() -> {
+            try {
+                Bitmap bitmap = NetworkClient.getJpeg(baseUrl, "/api/frame?pairCode=" + encodedPair + "&authToken=" + encodedToken + "&t=" + System.currentTimeMillis());
+                main.post(() -> {
+                    if (bitmap != null && frameView != null) {
+                        lastFrameUpdatedAt = frameUpdatedAt;
+                        lastFrameReceivedAtMs = System.currentTimeMillis();
+                        frameView.setImageBitmap(bitmap);
+                    }
+                });
+            } catch (Exception e) {
+                main.post(() -> setStatus("画面接收较慢，正在重试：" + e.getMessage()));
+            } finally {
+                familyFrameInFlight = false;
+            }
+        });
+    }
+
     private void sendAnnotation(float x, float y) {
+        long now = System.currentTimeMillis();
+        if (now - lastAnnotationSentAtMs < ANNOTATION_THROTTLE_MS) {
+            setStatus("画圈提示已发送，请稍等一下。");
+            return;
+        }
+        lastAnnotationSentAtMs = now;
         setStatus("正在发送画圈提示...");
-        io.execute(() -> {
+        statusIo.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
                         .put("pairCode", pairCode)
@@ -769,9 +839,14 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void requestRemoteControl() {
+    private void requestRemoteControl(Button sourceButton) {
+        if (remoteRequestInProgress) {
+            return;
+        }
+        remoteRequestInProgress = true;
+        setButtonBusy(sourceButton, "已请求，等待长辈...");
         setStatus("正在向长辈请求远程点击授权...");
-        io.execute(() -> {
+        statusIo.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
                         .put("pairCode", pairCode)
@@ -779,13 +854,19 @@ public class MainActivity extends Activity {
                 NetworkClient.postJson(baseUrl, "/api/control/request", payload);
                 main.post(() -> setStatus("已请求长辈授权。长辈同意后，你点击截图就能直接帮忙点击。"));
             } catch (Exception e) {
-                main.post(() -> setStatus("请求远程点击失败：" + e.getMessage()));
+                main.post(() -> {
+                    restoreButton(sourceButton);
+                    setStatus("请求远程点击失败：" + e.getMessage());
+                });
+            } finally {
+                remoteRequestInProgress = false;
+                main.postDelayed(() -> restoreButton(sourceButton), 5000);
             }
         });
     }
 
     private void sendRemoteTap(float x, float y) {
-        io.execute(() -> {
+        statusIo.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
                         .put("pairCode", pairCode)
@@ -838,15 +919,15 @@ public class MainActivity extends Activity {
             return;
         }
         pollElderAnnotationOnce();
-        pollElderControlRequestOnce();
-        main.postDelayed(this::pollElderAnnotationLoop, 500);
+        pollElderStatusOnce();
+        main.postDelayed(this::pollElderAnnotationLoop, ELDER_STATUS_POLL_MS);
     }
 
     private void pollElderBindLoop() {
         if (!elderBindPolling || authToken.isEmpty()) {
             return;
         }
-        io.execute(() -> {
+        statusIo.execute(() -> {
             try {
                 JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
                 JSONObject family = result.optJSONObject("family");
@@ -874,7 +955,7 @@ public class MainActivity extends Activity {
         if (authToken.isEmpty()) {
             return;
         }
-        io.execute(() -> {
+        statusIo.execute(() -> {
             try {
                 JSONObject result = NetworkClient.getJson(baseUrl, "/api/annotation?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
                 JSONObject annotation = result.optJSONObject("annotation");
@@ -887,15 +968,20 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void pollElderControlRequestOnce() {
-        if (authToken.isEmpty()) {
+    private void pollElderStatusOnce() {
+        if (authToken.isEmpty() || elderStatusInFlight) {
             return;
         }
-        io.execute(() -> {
+        elderStatusInFlight = true;
+        statusIo.execute(() -> {
             try {
                 JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
                 JSONObject family = result.optJSONObject("family");
-                if (family != null && family.optBoolean("controlRequested", false) && !prefs.getBoolean("remoteControlAllowed", false)) {
+                if (family == null) {
+                    return;
+                }
+                handleAssistConnectionTimeout(family);
+                if (family.optBoolean("controlRequested", false) && !prefs.getBoolean("remoteControlAllowed", false)) {
                     String updatedAt = family.optString("controlUpdatedAt", "");
                     String handledAt = prefs.getString("handledControlRequestAt", "");
                     if (!updatedAt.isEmpty() && !updatedAt.equals(handledAt)) {
@@ -903,8 +989,41 @@ public class MainActivity extends Activity {
                     }
                 }
             } catch (Exception ignored) {
+            } finally {
+                elderStatusInFlight = false;
             }
         });
+    }
+
+    private void handleAssistConnectionTimeout(JSONObject family) {
+        if (!prefs.getBoolean("assistActive", false) || !family.optBoolean("active", false)) {
+            return;
+        }
+        long startedAt = prefs.getLong("assistStartedAtMs", 0);
+        long now = System.currentTimeMillis();
+        if (startedAt <= 0 || now - startedAt < HELP_CONNECT_TIMEOUT_MS) {
+            return;
+        }
+        long lastSeenAt = family.optLong("lastFamilySeenAtMs", 0);
+        boolean neverConnected = lastSeenAt < startedAt;
+        boolean disconnectedTooLong = lastSeenAt > 0 && now - lastSeenAt > HELP_CONNECT_TIMEOUT_MS;
+        if (neverConnected || disconnectedTooLong) {
+            main.post(() -> stopAssistance("家属长时间没有连接。本次协助已结束，需要时请重新点“开始协助”。"));
+        }
+    }
+
+    private void stopAssistance(String message) {
+        stopService(new Intent(this, CaptureService.class));
+        stopService(new Intent(this, WebRtcScreenService.class));
+        stopService(new Intent(this, AnnotationOverlayService.class));
+        prefs.edit()
+                .putBoolean("remoteControlAllowed", false)
+                .putBoolean("assistActive", false)
+                .remove("assistStartedAtMs")
+                .apply();
+        endHelpRequest();
+        showElder();
+        setStatus(message);
     }
 
     private void handleRemoteControlRequest(String updatedAt) {
@@ -1086,7 +1205,7 @@ public class MainActivity extends Activity {
         }
         prefs.edit().putBoolean("remoteControlAllowed", allowed).apply();
         setStatus(allowed ? "已允许家属远程点击。本次协助结束后会自动关闭。" : "已关闭家属远程点击。");
-        io.execute(() -> {
+        statusIo.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
                         .put("pairCode", pairCode)
@@ -1188,6 +1307,36 @@ public class MainActivity extends Activity {
         if (status != null) {
             status.setText(text);
         }
+    }
+
+    private void setButtonBusy(Button button, String busyText) {
+        if (button == null) {
+            return;
+        }
+        if (button.getTag() == null) {
+            button.setTag(button.getText().toString());
+        }
+        button.setEnabled(false);
+        button.setAlpha(0.62f);
+        button.setText(busyText);
+    }
+
+    private void restoreButton(Button button) {
+        if (button == null) {
+            return;
+        }
+        Object original = button.getTag();
+        if (original instanceof String) {
+            button.setText((String) original);
+            button.setTag(null);
+        }
+        button.setEnabled(true);
+        button.setAlpha(1f);
+    }
+
+    private void temporarilyDisable(Button button, String busyText) {
+        setButtonBusy(button, busyText);
+        main.postDelayed(() -> restoreButton(button), ACTION_BUTTON_RESET_MS);
     }
 
     private void configureSystemBars() {
