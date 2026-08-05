@@ -42,6 +42,13 @@ function familyFor(pairCode) {
       controlAllowed: false,
       controlUpdatedAt: "",
       controlAction: null,
+      webrtc: {
+        offer: null,
+        answer: null,
+        elderIce: [],
+        familyIce: [],
+        updatedAt: "",
+      },
     });
   }
   return families.get(pairCode);
@@ -161,6 +168,13 @@ const server = http.createServer(async (req, res) => {
       family.deviceName = String(payload.deviceName || "");
       family.masked = Boolean(payload.masked);
       family.updatedAt = new Date().toISOString();
+      family.webrtc = {
+        offer: null,
+        answer: null,
+        elderIce: [],
+        familyIce: [],
+        updatedAt: family.updatedAt,
+      };
       sendJson(res, 200, { ok: true, family: publicFamily(family) });
       return;
     }
@@ -248,6 +262,95 @@ const server = http.createServer(async (req, res) => {
       const action = result.family.controlAction;
       result.family.controlAction = null;
       sendJson(res, 200, { action });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webrtc/offer") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken, "elder");
+      if (!result) return;
+      result.family.webrtc.offer = {
+        type: String(payload.type || "offer"),
+        sdp: String(payload.sdp || ""),
+        updatedAt: new Date().toISOString(),
+      };
+      result.family.webrtc.answer = null;
+      result.family.webrtc.elderIce = [];
+      result.family.webrtc.familyIce = [];
+      result.family.webrtc.updatedAt = result.family.webrtc.offer.updatedAt;
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/webrtc/offer") {
+      const pairCode = String(url.searchParams.get("pairCode") || "").trim();
+      const authToken = String(url.searchParams.get("authToken") || "").trim();
+      const result = requireMember(res, pairCode, authToken, "family");
+      if (!result) return;
+      sendJson(res, 200, { offer: result.family.webrtc.offer });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webrtc/answer") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken, "family");
+      if (!result) return;
+      result.family.webrtc.answer = {
+        type: String(payload.type || "answer"),
+        sdp: String(payload.sdp || ""),
+        updatedAt: new Date().toISOString(),
+      };
+      result.family.webrtc.updatedAt = result.family.webrtc.answer.updatedAt;
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/webrtc/answer") {
+      const pairCode = String(url.searchParams.get("pairCode") || "").trim();
+      const authToken = String(url.searchParams.get("authToken") || "").trim();
+      const result = requireMember(res, pairCode, authToken, "elder");
+      if (!result) return;
+      sendJson(res, 200, { answer: result.family.webrtc.answer });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/webrtc/ice") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const from = String(payload.from || "").trim();
+      const role = from === "elder" ? "elder" : "family";
+      const result = requireMember(res, pairCode, authToken, role);
+      if (!result) return;
+      const item = {
+        sdpMid: String(payload.sdpMid || ""),
+        sdpMLineIndex: Number(payload.sdpMLineIndex || 0),
+        candidate: String(payload.candidate || ""),
+        updatedAt: new Date().toISOString(),
+      };
+      if (role === "elder") {
+        result.family.webrtc.elderIce.push(item);
+      } else {
+        result.family.webrtc.familyIce.push(item);
+      }
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/webrtc/ice") {
+      const pairCode = String(url.searchParams.get("pairCode") || "").trim();
+      const authToken = String(url.searchParams.get("authToken") || "").trim();
+      const role = String(url.searchParams.get("role") || "").trim();
+      const from = String(url.searchParams.get("from") || "").trim();
+      const since = Number(url.searchParams.get("since") || 0);
+      const result = requireMember(res, pairCode, authToken, role === "elder" ? "elder" : "family");
+      if (!result) return;
+      const source = from === "elder" ? result.family.webrtc.elderIce : result.family.webrtc.familyIce;
+      sendJson(res, 200, { candidates: source.slice(since), next: source.length });
       return;
     }
 

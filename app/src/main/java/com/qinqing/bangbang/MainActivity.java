@@ -21,6 +21,7 @@ import android.provider.Settings;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.Window;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -29,6 +30,9 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import org.json.JSONObject;
+import org.webrtc.RendererCommon;
+import org.webrtc.SurfaceViewRenderer;
+import org.webrtc.VideoTrack;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -55,10 +59,13 @@ public class MainActivity extends Activity {
     private String deviceId;
     private TextView status;
     private ImageView frameView;
+    private SurfaceViewRenderer rtcView;
+    private WebRtcClient familyRtcClient;
     private boolean familyPolling;
     private boolean elderAnnotationPolling;
     private boolean familyPollInFlight;
     private boolean familyControlAllowed;
+    private boolean rtcVideoReady;
     private long lastFrameReceivedAtMs;
     private String lastFrameUpdatedAt = "";
 
@@ -76,6 +83,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        configureSystemBars();
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         baseUrl = migrateRelayUrl(prefs.getString("baseUrl", DEFAULT_RELAY_URL));
         pairCode = prefs.getString("pairCode", DEFAULT_PAIR_CODE);
@@ -95,6 +103,7 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         familyPolling = false;
         elderAnnotationPolling = false;
+        stopFamilyWebRtc();
         io.shutdownNow();
         super.onDestroy();
     }
@@ -243,6 +252,7 @@ public class MainActivity extends Activity {
         accessibilityButton.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         stopButton.setOnClickListener(v -> {
             stopService(new Intent(this, CaptureService.class));
+            stopService(new Intent(this, WebRtcScreenService.class));
             stopService(new Intent(this, AnnotationOverlayService.class));
             prefs.edit().putBoolean("remoteControlAllowed", false).apply();
             endHelpRequest();
@@ -280,31 +290,32 @@ public class MainActivity extends Activity {
         familyPolling = true;
         elderAnnotationPolling = false;
         familyControlAllowed = false;
+        rtcVideoReady = false;
         lastFrameReceivedAtMs = 0;
         lastFrameUpdatedAt = "";
         root = verticalRoot();
         root.addView(hero("家属模式", "看屏幕，点一下提示长辈"));
         root.addView(statusPill(bindingStatusText()));
-        status = notice("正在等待长辈发起协助。看到屏幕后，点需要长辈点击的位置。");
-        frameView = new ImageView(this);
-        frameView.setAdjustViewBounds(true);
-        frameView.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        frameView.setBackground(rounded(0xFFF3F6FA, dp(18), COLOR_LINE));
-        frameView.setPadding(dp(8), dp(8), dp(8), dp(8));
-        frameView.setMinimumHeight(dp(320));
-        frameView.setLayoutParams(new LinearLayout.LayoutParams(
+        status = notice("正在等待长辈发起协助。实时画面出现后，点需要长辈点击的位置。");
+        rtcView = new SurfaceViewRenderer(this);
+        rtcView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT);
+        rtcView.setMirror(false);
+        rtcView.setEnableHardwareScaler(true);
+        rtcView.setBackgroundColor(0xFF0F172A);
+        rtcView.setMinimumHeight(dp(420));
+        rtcView.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+                dp(460)
         ));
-        frameView.setOnTouchListener((view, event) -> {
-            if (event.getAction() == MotionEvent.ACTION_UP && frameView.getDrawable() != null) {
+        rtcView.setOnTouchListener((view, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_UP) {
                 long age = System.currentTimeMillis() - lastFrameReceivedAtMs;
-                if (lastFrameReceivedAtMs == 0 || age > FRESH_FRAME_MS) {
-                    setStatus("屏幕画面正在刷新，请等画面稳定后再点。");
+                if (!rtcVideoReady && (lastFrameReceivedAtMs == 0 || age > FRESH_FRAME_MS)) {
+                    setStatus("实时画面正在连接，请等画面出现后再点。");
                     pollFamilyOnce();
                     return true;
                 }
-                float[] point = normalizedImagePoint(frameView, event.getX(), event.getY());
+                float[] point = normalizedViewPoint(rtcView, event.getX(), event.getY());
                 float x = point[0];
                 float y = point[1];
                 sendAnnotation(x, y);
@@ -323,17 +334,19 @@ public class MainActivity extends Activity {
         refreshButton.setOnClickListener(v -> pollFamilyOnce());
         backButton.setOnClickListener(v -> {
             familyPolling = false;
+            stopFamilyWebRtc();
             showSetup();
         });
 
-        LinearLayout screenCard = card("长辈屏幕", "点截图位置会发送红圈提示；长辈授权后，也会自动帮长辈点击。");
-        screenCard.addView(frameView);
+        LinearLayout screenCard = card("长辈实时屏幕", "点画面位置会发送红圈提示；长辈授权后，也会自动帮长辈点击。");
+        screenCard.addView(rtcView);
         root.addView(screenCard);
         root.addView(status);
         root.addView(controlRequestButton);
         root.addView(refreshButton);
         root.addView(backButton);
         setContentView(scroll(root));
+        startFamilyWebRtc();
         pollFamilyLoop();
     }
 
@@ -462,12 +475,11 @@ public class MainActivity extends Activity {
     }
 
     private void startCaptureService(int resultCode, Intent data) {
-        Intent intent = new Intent(this, CaptureService.class);
-        intent.putExtra(CaptureService.EXTRA_BASE_URL, baseUrl);
-        intent.putExtra(CaptureService.EXTRA_PAIR_CODE, pairCode);
-        intent.putExtra(CaptureService.EXTRA_AUTH_TOKEN, authToken);
-        intent.putExtra(CaptureService.EXTRA_RESULT_CODE, resultCode);
-        intent.putExtra(CaptureService.EXTRA_RESULT_DATA, data);
+        Intent intent = new Intent(this, WebRtcScreenService.class);
+        intent.putExtra(WebRtcScreenService.EXTRA_BASE_URL, baseUrl);
+        intent.putExtra(WebRtcScreenService.EXTRA_PAIR_CODE, pairCode);
+        intent.putExtra(WebRtcScreenService.EXTRA_AUTH_TOKEN, authToken);
+        intent.putExtra(WebRtcScreenService.EXTRA_RESULT_DATA, data);
         if (Build.VERSION.SDK_INT >= 26) {
             startForegroundService(intent);
         } else {
@@ -485,6 +497,42 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {
             }
         });
+    }
+
+    private void startFamilyWebRtc() {
+        stopFamilyWebRtc();
+        familyRtcClient = new WebRtcClient(this, baseUrl, pairCode, authToken, new WebRtcClient.Listener() {
+            @Override
+            public void onState(String text) {
+                setStatus(text);
+            }
+
+            @Override
+            public void onRemoteVideo(VideoTrack track) {
+                rtcVideoReady = true;
+                lastFrameReceivedAtMs = System.currentTimeMillis();
+                if (rtcView != null) {
+                    track.addSink(rtcView);
+                }
+                setStatus("实时画面已连接。点画面可以提示长辈。");
+            }
+        });
+        if (rtcView != null) {
+            rtcView.init(familyRtcClient.eglContext(), null);
+        }
+        familyRtcClient.startFamily();
+    }
+
+    private void stopFamilyWebRtc() {
+        if (familyRtcClient != null) {
+            familyRtcClient.stop();
+            familyRtcClient = null;
+        }
+        if (rtcView != null) {
+            rtcView.release();
+            rtcView = null;
+        }
+        rtcVideoReady = false;
     }
 
     private void pollFamilyLoop() {
@@ -513,15 +561,10 @@ public class MainActivity extends Activity {
                 }
                 String elderName = help.optString("elderName", "长辈");
                 String updatedAt = help.optString("updatedAt", "");
-                Bitmap bitmap = NetworkClient.getJpeg(baseUrl, "/api/frame?pairCode=" + encoded + "&authToken=" + token + "&t=" + System.currentTimeMillis());
                 main.post(() -> {
                     String controlText = familyControlAllowed ? "远程点击已授权。" : "未授权远程点击。";
                     setStatus(elderName + " 正在请求协助。" + controlText + " 最后更新：" + updatedAt);
-                    if (bitmap != null) {
-                        lastFrameUpdatedAt = updatedAt;
-                        lastFrameReceivedAtMs = System.currentTimeMillis();
-                        frameView.setImageBitmap(bitmap);
-                    }
+                    lastFrameUpdatedAt = updatedAt;
                 });
             } catch (Exception e) {
                 main.post(() -> setStatus("连接 relay 失败：" + e.getMessage()));
@@ -598,6 +641,17 @@ public class MainActivity extends Activity {
         float top = imageView.getPaddingTop() + (viewHeight - displayedHeight) / 2f;
         float x = (touchX - left) / Math.max(1f, displayedWidth);
         float y = (touchY - top) / Math.max(1f, displayedHeight);
+        return new float[]{
+                Math.max(0f, Math.min(1f, x)),
+                Math.max(0f, Math.min(1f, y))
+        };
+    }
+
+    private float[] normalizedViewPoint(View view, float touchX, float touchY) {
+        int width = Math.max(1, view.getWidth());
+        int height = Math.max(1, view.getHeight());
+        float x = touchX / width;
+        float y = touchY / height;
         return new float[]{
                 Math.max(0f, Math.min(1f, x)),
                 Math.max(0f, Math.min(1f, y))
@@ -816,10 +870,21 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void configureSystemBars() {
+        Window window = getWindow();
+        window.setStatusBarColor(COLOR_BG);
+        window.setNavigationBarColor(COLOR_BG);
+        if (Build.VERSION.SDK_INT >= 23) {
+            window.getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+            );
+        }
+    }
+
     private LinearLayout verticalRoot() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dp(18), dp(22), dp(18), dp(28));
+        layout.setPadding(dp(18), dp(12), dp(18), dp(24));
         layout.setGravity(Gravity.CENTER_HORIZONTAL);
         layout.setBackgroundColor(COLOR_BG);
         return layout;

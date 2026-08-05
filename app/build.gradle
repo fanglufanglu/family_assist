@@ -14,3 +14,7 @@ android {
         versionName "0.1.0"
     }
 }
+
+dependencies {
+    implementation "io.github.webrtc-sdk:android:144.7559.08"
+}

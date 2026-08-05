@@ -27,6 +27,11 @@
             android:foregroundServiceType="mediaProjection" />
 
         <service
+            android:name=".WebRtcScreenService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
+        <service
             android:name=".AnnotationOverlayService"
             android:exported="false" />
 
