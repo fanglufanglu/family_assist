@@ -39,6 +39,7 @@ import org.webrtc.RendererCommon;
 import org.webrtc.SurfaceViewRenderer;
 import org.webrtc.VideoTrack;
 
+import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
@@ -631,7 +632,7 @@ public class MainActivity extends Activity {
                         .put("elderName", displayName)
                         .put("deviceName", Build.MANUFACTURER + " " + Build.MODEL)
                         .put("deviceId", deviceId);
-                JSONObject result = NetworkClient.postJson(baseUrl, "/api/invite", payload);
+                JSONObject result = postJsonWithRelayFallback("/api/invite", payload);
                 authToken = result.optString("authToken", "");
                 memberRole = "elder";
                 String inviteCode = result.optString("inviteCode", "");
@@ -671,7 +672,7 @@ public class MainActivity extends Activity {
                         .put("inviteCode", inviteCode)
                         .put("familyName", displayName)
                         .put("deviceId", deviceId);
-                JSONObject result = NetworkClient.postJson(baseUrl, "/api/bind", payload);
+                JSONObject result = postJsonWithRelayFallback("/api/bind", payload);
                 authToken = result.optString("authToken", "");
                 memberRole = "family";
                 prefs.edit()
@@ -1168,7 +1169,7 @@ public class MainActivity extends Activity {
     }
 
     private void saveSetup(EditText serverInput, EditText codeInput, EditText nameInput) {
-        baseUrl = NetworkClient.normalizeBaseUrl(serverInput.getText().toString());
+        baseUrl = sanitizeRelayUrl(serverInput.getText().toString());
         pairCode = codeInput.getText().toString().trim();
         displayName = nameInput.getText().toString().trim();
         if (displayName.isEmpty()) {
@@ -1332,16 +1333,57 @@ public class MainActivity extends Activity {
     }
 
     private String migrateRelayUrl(String value) {
+        String normalized = sanitizeRelayUrl(value);
+        prefs.edit().putString("baseUrl", normalized).apply();
+        return normalized;
+    }
+
+    private String sanitizeRelayUrl(String value) {
         String normalized = NetworkClient.normalizeBaseUrl(value);
+        normalized = stripRelayPath(normalized);
         if (normalized.isEmpty()
                 || normalized.contains("192.168.")
                 || normalized.contains("10.0.2.2")
                 || normalized.contains("127.0.0.1")
-                || normalized.contains("localhost")) {
+                || normalized.contains("localhost")
+                || (normalized.contains(".github.dev") && !normalized.contains(".app.github.dev"))) {
             normalized = DEFAULT_RELAY_URL;
         }
-        prefs.edit().putString("baseUrl", normalized).apply();
         return normalized;
+    }
+
+    private String stripRelayPath(String value) {
+        try {
+            URL url = new URL(value);
+            return url.getProtocol() + "://" + url.getHost() + (url.getPort() >= 0 ? ":" + url.getPort() : "");
+        } catch (Exception ignored) {
+            return value;
+        }
+    }
+
+    private JSONObject postJsonWithRelayFallback(String path, JSONObject payload) throws Exception {
+        try {
+            return NetworkClient.postJson(baseUrl, path, payload);
+        } catch (Exception e) {
+            if (isRelayRouteNotFound(e) && resetRelayToDefaultIfNeeded()) {
+                return NetworkClient.postJson(baseUrl, path, payload);
+            }
+            throw e;
+        }
+    }
+
+    private boolean isRelayRouteNotFound(Exception e) {
+        String message = e.getMessage();
+        return message != null && message.contains("HTTP 404");
+    }
+
+    private boolean resetRelayToDefaultIfNeeded() {
+        if (DEFAULT_RELAY_URL.equals(baseUrl)) {
+            return false;
+        }
+        baseUrl = DEFAULT_RELAY_URL;
+        prefs.edit().putString("baseUrl", baseUrl).apply();
+        return true;
     }
 
     private boolean isPrivacyMasked() {
