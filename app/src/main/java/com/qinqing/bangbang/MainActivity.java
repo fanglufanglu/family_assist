@@ -58,7 +58,7 @@ public class MainActivity extends Activity {
     private static final long HELP_CONNECT_TIMEOUT_MS = 90_000;
     private static final long ACTION_BUTTON_RESET_MS = 1800;
     private static final long ANNOTATION_THROTTLE_MS = 850;
-    private static final boolean USE_WEBRTC = true;
+    private static final boolean USE_WEBRTC = false;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService statusIo = Executors.newSingleThreadExecutor();
