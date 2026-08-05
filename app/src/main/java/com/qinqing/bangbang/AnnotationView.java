@@ -4,7 +4,9 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.util.DisplayMetrics;
 import android.view.View;
+import android.view.WindowManager;
 
 final class AnnotationView extends View {
     private final Paint circlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -52,6 +54,15 @@ final class AnnotationView extends View {
         }
         float cx = x * getWidth();
         float cy = y * getHeight();
+        WindowManager windowManager = (WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE);
+        if (windowManager != null) {
+            DisplayMetrics metrics = new DisplayMetrics();
+            windowManager.getDefaultDisplay().getRealMetrics(metrics);
+            int[] location = new int[2];
+            getLocationOnScreen(location);
+            cx = x * metrics.widthPixels - location[0];
+            cy = y * metrics.heightPixels - location[1];
+        }
         float r = radius * Math.min(getWidth(), getHeight());
         canvas.drawCircle(cx, cy, r, fillPaint);
         canvas.drawCircle(cx, cy, r, circlePaint);

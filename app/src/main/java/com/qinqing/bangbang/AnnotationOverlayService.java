@@ -19,12 +19,14 @@ import java.util.concurrent.Executors;
 
 public class AnnotationOverlayService extends Service {
     private static final String PREFS = "family-assist";
+    private static final long ANNOTATION_VISIBLE_MS = 3500;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private AnnotationView annotationView;
     private WindowManager windowManager;
     private boolean running;
     private String lastUpdatedAt = "";
+    private long visibleUntilMs;
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
@@ -71,7 +73,7 @@ public class AnnotationOverlayService extends Service {
                 return;
             }
             pollOnce();
-            main.postDelayed(this, 500);
+            main.postDelayed(this, 350);
         }
     };
 
@@ -106,6 +108,15 @@ public class AnnotationOverlayService extends Service {
         String updatedAt = annotation.optString("updatedAt", "");
         if (!updatedAt.equals(lastUpdatedAt)) {
             lastUpdatedAt = updatedAt;
+            visibleUntilMs = System.currentTimeMillis() + ANNOTATION_VISIBLE_MS;
+            main.postDelayed(() -> {
+                if (annotationView != null && updatedAt.equals(lastUpdatedAt)) {
+                    annotationView.clear();
+                }
+            }, ANNOTATION_VISIBLE_MS);
+        } else if (System.currentTimeMillis() > visibleUntilMs) {
+            annotationView.clear();
+            return;
         }
         annotationView.setAnnotation(
                 (float) annotation.optDouble("x", 0.5),

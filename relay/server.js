@@ -229,7 +229,9 @@ const server = http.createServer(async (req, res) => {
         y: Number(payload.y || 0),
         radius: Number(payload.radius || 0.08),
         label: String(payload.label || "请点这里"),
+        frameUpdatedAt: String(payload.frameUpdatedAt || ""),
         updatedAt: new Date().toISOString(),
+        expiresAt: Date.now() + 3500,
       };
       sendJson(res, 200, { ok: true, annotation: result.family.annotation });
       return;
@@ -240,6 +242,9 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(url.searchParams.get("authToken") || "").trim();
       const result = requireMember(res, pairCode, authToken, "elder");
       if (!result) return;
+      if (result.family.annotation && Date.now() > Number(result.family.annotation.expiresAt || 0)) {
+        result.family.annotation = null;
+      }
       sendJson(res, 200, { annotation: result.family.annotation });
       return;
     }

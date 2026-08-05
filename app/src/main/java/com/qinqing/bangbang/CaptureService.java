@@ -131,7 +131,7 @@ public class CaptureService extends Service {
         @Override
         public void run() {
             captureAndUpload();
-            worker.postDelayed(this, 650);
+            worker.postDelayed(this, 450);
         }
     };
 
@@ -167,7 +167,7 @@ public class CaptureService extends Service {
             }
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            scaled.compress(Bitmap.CompressFormat.JPEG, 40, out);
+            scaled.compress(Bitmap.CompressFormat.JPEG, 36, out);
             scaled.recycle();
             String encodedPairCode = URLEncoder.encode(pairCode, StandardCharsets.UTF_8.name());
             String encodedAuthToken = URLEncoder.encode(authToken, StandardCharsets.UTF_8.name());

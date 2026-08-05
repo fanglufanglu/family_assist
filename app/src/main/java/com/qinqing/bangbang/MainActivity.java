@@ -38,6 +38,9 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int REQUEST_CAPTURE = 2001;
     private static final String PREFS = "family-assist";
+    private static final String DEFAULT_RELAY_URL = "https://super-duper-funicular-44776x6g7hjvwj-8787.app.github.dev";
+    private static final String DEFAULT_PAIR_CODE = "family001";
+    private static final long FRESH_FRAME_MS = 2500;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
@@ -54,6 +57,9 @@ public class MainActivity extends Activity {
     private ImageView frameView;
     private boolean familyPolling;
     private boolean elderAnnotationPolling;
+    private boolean familyPollInFlight;
+    private long lastFrameReceivedAtMs;
+    private String lastFrameUpdatedAt = "";
 
     private static final int COLOR_BG = 0xFFFFFBF7;
     private static final int COLOR_SURFACE = 0xFFFFFFFF;
@@ -70,8 +76,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        baseUrl = prefs.getString("baseUrl", "http://192.168.1.10:8787");
-        pairCode = prefs.getString("pairCode", "family001");
+        baseUrl = migrateRelayUrl(prefs.getString("baseUrl", DEFAULT_RELAY_URL));
+        pairCode = prefs.getString("pairCode", DEFAULT_PAIR_CODE);
         displayName = prefs.getString("displayName", "妈妈");
         authToken = prefs.getString("authToken", "");
         memberRole = prefs.getString("memberRole", "");
@@ -109,57 +115,63 @@ public class MainActivity extends Activity {
 
         root.addView(hero("亲情帮帮", "爸妈点一下，家人看屏幕帮忙"));
         root.addView(statusPill(bindingStatusText()));
+        status = notice("请选择这台手机的身份。连接服务已自动配置，正常使用不需要填写地址。");
 
-        EditText serverInput = input("例如 https://xxxx-8787.app.github.dev", baseUrl);
-        EditText codeInput = input("家庭码，例如 family001", pairCode);
-        EditText nameInput = input("显示名称，例如 妈妈 / 女儿", displayName);
-        EditText inviteInput = input("家属输入长辈给的 6 位绑定码", "");
-        status = notice("第一次使用：两台手机填写同一个 Relay 地址和家庭码，然后完成亲属绑定。");
+        Button elderButton = primaryButton("我是长辈");
+        elderButton.setTextSize(23);
+        Button familyButton = secondaryButton("我是家属");
+        familyButton.setTextSize(22);
+        Button settingsButton = secondaryButton("连接设置");
 
-        Button inviteButton = primaryButton("生成长辈绑定码");
-        Button bindButton = secondaryButton("绑定这位长辈");
-        Button elderButton = primaryButton("我是长辈，需要家人帮忙");
-        Button familyButton = secondaryButton("我是家属，去帮长辈");
+        elderButton.setOnClickListener(v -> showElder());
+        familyButton.setOnClickListener(v -> showFamily());
+        settingsButton.setOnClickListener(v -> showAdvancedSettings());
 
-        inviteButton.setOnClickListener(v -> {
+        LinearLayout elderCard = card("长辈手机", "用于发起求助。需要帮忙时，只点一个大按钮。");
+        elderCard.addView(elderButton);
+        root.addView(elderCard);
+
+        LinearLayout familyCard = card("家属手机", "用于接收求助、查看屏幕，并给长辈画圈提示。");
+        familyCard.addView(familyButton);
+        root.addView(familyCard);
+
+        LinearLayout safetyCard = card("使用规则", "必须先完成亲属绑定；长辈发起协助后，家属才能看到屏幕。");
+        safetyCard.addView(settingsButton);
+        root.addView(safetyCard);
+        root.addView(status);
+        setContentView(scroll(root));
+    }
+
+    private void showAdvancedSettings() {
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        root = verticalRoot();
+        root.addView(hero("连接设置", "仅用于测试环境或服务地址变更"));
+        status = notice("当前已自动使用临时 Relay。正式版本会由后台自动分配连接服务。");
+
+        EditText serverInput = input("Relay 地址", baseUrl);
+        EditText codeInput = input("家庭码", pairCode);
+        EditText nameInput = input("我的显示名称", displayName);
+        Button saveButton = primaryButton("保存设置");
+        Button backButton = secondaryButton("返回首页");
+
+        saveButton.setOnClickListener(v -> {
             saveSetup(serverInput, codeInput, nameInput);
-            createInvite();
+            setStatus("设置已保存。");
         });
-        bindButton.setOnClickListener(v -> {
-            saveSetup(serverInput, codeInput, nameInput);
-            bindFamily(inviteInput.getText().toString().trim());
-        });
-        elderButton.setOnClickListener(v -> {
-            saveSetup(serverInput, codeInput, nameInput);
-            showElder();
-        });
-        familyButton.setOnClickListener(v -> {
-            saveSetup(serverInput, codeInput, nameInput);
-            showFamily();
-        });
+        backButton.setOnClickListener(v -> showSetup());
 
-        LinearLayout roleCard = card("先选择身份", "长辈只需要记住蓝色按钮；家属负责配置和绑定。");
-        roleCard.addView(elderButton);
-        roleCard.addView(familyButton);
-        root.addView(roleCard);
-
-        LinearLayout connectionCard = card("准备连接", "两台手机填写同一个 Relay 地址和家庭码。");
+        LinearLayout connectionCard = card("测试连接", "如果 Codespaces 地址变化，可在这里临时更新。");
         connectionCard.addView(label("Relay 地址"));
         connectionCard.addView(serverInput);
         connectionCard.addView(label("家庭码"));
         connectionCard.addView(codeInput);
-        connectionCard.addView(label("我的显示名称"));
+        connectionCard.addView(label("显示名称"));
         connectionCard.addView(nameInput);
+        connectionCard.addView(saveButton);
         root.addView(connectionCard);
-
-        LinearLayout bindCard = card("亲属绑定", "长辈生成 6 位码，家属输入后才能查看协助请求。");
-        bindCard.addView(inviteButton);
-        bindCard.addView(label("亲属绑定码"));
-        bindCard.addView(inviteInput);
-        bindCard.addView(bindButton);
-        root.addView(bindCard);
-
         root.addView(status);
+        root.addView(backButton);
         setContentView(scroll(root));
     }
 
@@ -169,7 +181,35 @@ public class MainActivity extends Activity {
         root = verticalRoot();
         root.addView(hero("长辈模式", "需要帮忙时，只点下面蓝色按钮"));
         root.addView(statusPill(bindingStatusText()));
-        status = notice("尚未发起协助。家属不能主动进入你的手机。");
+        status = notice("家属不能主动进入你的手机。只有你点“找家人帮忙”后，家属才能看到屏幕。");
+
+        if (!isBoundAs("elder")) {
+            EditText nameInput = input("长辈名称，例如 妈妈", displayName);
+            Button inviteButton = primaryButton("生成亲属绑定码");
+            Button backButton = secondaryButton("返回首页");
+            inviteButton.setOnClickListener(v -> {
+                displayName = nameInput.getText().toString().trim();
+                if (displayName.isEmpty()) {
+                    displayName = "长辈";
+                }
+                prefs.edit().putString("displayName", displayName).apply();
+                createInvite();
+            });
+            backButton.setOnClickListener(v -> {
+                elderAnnotationPolling = false;
+                showSetup();
+            });
+
+            LinearLayout bindCard = card("第一步：绑定家属", "点下面按钮生成 6 位码，把它告诉家属。绑定后再发起协助。");
+            bindCard.addView(label("我的称呼"));
+            bindCard.addView(nameInput);
+            bindCard.addView(inviteButton);
+            root.addView(bindCard);
+            root.addView(status);
+            root.addView(backButton);
+            setContentView(scroll(root));
+            return;
+        }
 
         Button helpButton = primaryButton("找家人帮忙");
         helpButton.setTextSize(24);
@@ -177,7 +217,7 @@ public class MainActivity extends Activity {
         Button overlayButton = secondaryButton("允许家属画圈提示");
         Button accessibilityButton = secondaryButton("开启敏感页面自动检测");
         Button stopButton = dangerButton("停止协助");
-        Button backButton = secondaryButton("返回设置");
+        Button backButton = secondaryButton("返回首页");
 
         helpButton.setOnClickListener(v -> requestHelpAndCapture());
         privacyButton.setOnClickListener(v -> {
@@ -204,7 +244,7 @@ public class MainActivity extends Activity {
         LinearLayout stepsCard = card("接下来会发生什么", "1. 点“找家人帮忙”。\n2. 允许屏幕共享。\n3. 家属看到屏幕后，会用红圈告诉你点哪里。");
         root.addView(stepsCard);
 
-        LinearLayout safetyCard = card("隐私保护", "遇到验证码、支付、银行卡页面时，家属端会看到保护画面。");
+        LinearLayout safetyCard = card("隐私保护", "遇到验证码、支付、银行卡页面时，可以打开遮罩保护画面。");
         safetyCard.addView(privacyButton);
         safetyCard.addView(accessibilityButton);
         safetyCard.addView(overlayButton);
@@ -218,11 +258,14 @@ public class MainActivity extends Activity {
     }
 
     private void showFamily() {
-        if (!ensureBound("家属")) {
+        if (!isBoundAs("family")) {
+            showFamilyBind();
             return;
         }
         familyPolling = true;
         elderAnnotationPolling = false;
+        lastFrameReceivedAtMs = 0;
+        lastFrameUpdatedAt = "";
         root = verticalRoot();
         root.addView(hero("家属模式", "看屏幕，点一下给长辈画圈"));
         root.addView(statusPill(bindingStatusText()));
@@ -239,6 +282,12 @@ public class MainActivity extends Activity {
         ));
         frameView.setOnTouchListener((view, event) -> {
             if (event.getAction() == MotionEvent.ACTION_UP && frameView.getDrawable() != null) {
+                long age = System.currentTimeMillis() - lastFrameReceivedAtMs;
+                if (lastFrameReceivedAtMs == 0 || age > FRESH_FRAME_MS) {
+                    setStatus("屏幕画面正在刷新，请等画面稳定后再点。");
+                    pollFamilyOnce();
+                    return true;
+                }
                 float[] point = normalizedImagePoint(frameView, event.getX(), event.getY());
                 float x = point[0];
                 float y = point[1];
@@ -249,7 +298,7 @@ public class MainActivity extends Activity {
         });
 
         Button refreshButton = primaryButton("立即刷新");
-        Button backButton = secondaryButton("返回设置");
+        Button backButton = secondaryButton("返回首页");
         refreshButton.setOnClickListener(v -> pollFamilyOnce());
         backButton.setOnClickListener(v -> {
             familyPolling = false;
@@ -264,6 +313,41 @@ public class MainActivity extends Activity {
         root.addView(backButton);
         setContentView(scroll(root));
         pollFamilyLoop();
+    }
+
+    private void showFamilyBind() {
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        root = verticalRoot();
+        root.addView(hero("绑定长辈", "输入长辈手机上显示的 6 位码"));
+        root.addView(statusPill(bindingStatusText()));
+        status = notice("绑定成功后，这台手机才能接收长辈的求助。");
+
+        EditText nameInput = input("我的称呼，例如 女儿", displayName);
+        EditText inviteInput = input("6 位绑定码", "");
+        Button bindButton = primaryButton("绑定长辈");
+        Button backButton = secondaryButton("返回首页");
+
+        bindButton.setOnClickListener(v -> {
+            displayName = nameInput.getText().toString().trim();
+            if (displayName.isEmpty()) {
+                displayName = "家属";
+            }
+            prefs.edit().putString("displayName", displayName).apply();
+            bindFamily(inviteInput.getText().toString().trim());
+        });
+        backButton.setOnClickListener(v -> showSetup());
+
+        LinearLayout bindCard = card("亲属绑定", "请让长辈打开“我是长辈”，生成绑定码后告诉你。");
+        bindCard.addView(label("我的称呼"));
+        bindCard.addView(nameInput);
+        bindCard.addView(label("绑定码"));
+        bindCard.addView(inviteInput);
+        bindCard.addView(bindButton);
+        root.addView(bindCard);
+        root.addView(status);
+        root.addView(backButton);
+        setContentView(scroll(root));
     }
 
     private void requestHelpAndCapture() {
@@ -337,7 +421,10 @@ public class MainActivity extends Activity {
                         .putString("authToken", authToken)
                         .putString("memberRole", memberRole)
                         .apply();
-                main.post(() -> setStatus("绑定成功。现在可以进入家属模式等待协助。"));
+                main.post(() -> {
+                    showFamily();
+                    setStatus("绑定成功。正在等待长辈发起协助。");
+                });
             } catch (Exception e) {
                 main.post(() -> setStatus("绑定失败：" + e.getMessage()));
             }
@@ -379,10 +466,14 @@ public class MainActivity extends Activity {
             return;
         }
         pollFamilyOnce();
-        main.postDelayed(this::pollFamilyLoop, 750);
+        main.postDelayed(this::pollFamilyLoop, 500);
     }
 
     private void pollFamilyOnce() {
+        if (familyPollInFlight) {
+            return;
+        }
+        familyPollInFlight = true;
         io.execute(() -> {
             try {
                 String encoded = encoded(pairCode);
@@ -399,11 +490,15 @@ public class MainActivity extends Activity {
                 main.post(() -> {
                     setStatus(elderName + " 正在请求协助。最后更新：" + updatedAt);
                     if (bitmap != null) {
+                        lastFrameUpdatedAt = updatedAt;
+                        lastFrameReceivedAtMs = System.currentTimeMillis();
                         frameView.setImageBitmap(bitmap);
                     }
                 });
             } catch (Exception e) {
                 main.post(() -> setStatus("连接 relay 失败：" + e.getMessage()));
+            } finally {
+                familyPollInFlight = false;
             }
         });
     }
@@ -418,9 +513,10 @@ public class MainActivity extends Activity {
                         .put("x", x)
                         .put("y", y)
                         .put("radius", 0.08)
-                        .put("label", "请点这里");
+                        .put("label", "请点这里")
+                        .put("frameUpdatedAt", lastFrameUpdatedAt);
                 NetworkClient.postJson(baseUrl, "/api/annotation", payload);
-                main.post(() -> setStatus("画圈提示已发送。"));
+                main.post(() -> setStatus("画圈提示已发送，几秒后会自动消失。"));
             } catch (Exception e) {
                 main.post(() -> setStatus("发送画圈失败：" + e.getMessage()));
             }
@@ -531,6 +627,23 @@ public class MainActivity extends Activity {
             return false;
         }
         return true;
+    }
+
+    private boolean isBoundAs(String role) {
+        return !authToken.isEmpty() && role.equals(memberRole);
+    }
+
+    private String migrateRelayUrl(String value) {
+        String normalized = NetworkClient.normalizeBaseUrl(value);
+        if (normalized.isEmpty()
+                || normalized.contains("192.168.")
+                || normalized.contains("10.0.2.2")
+                || normalized.contains("127.0.0.1")
+                || normalized.contains("localhost")) {
+            normalized = DEFAULT_RELAY_URL;
+        }
+        prefs.edit().putString("baseUrl", normalized).apply();
+        return normalized;
     }
 
     private boolean isPrivacyMasked() {
