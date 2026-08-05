@@ -81,8 +81,8 @@ final class WebRtcClient {
                 pollAnswerLoop();
                 pollIceLoop();
                 notifyState("实时屏幕已启动，正在等待家属连接。");
-            } catch (Exception e) {
-                notifyState("WebRTC 启动失败：" + e.getMessage());
+            } catch (Throwable e) {
+                notifyState("WebRTC 启动失败：" + safeMessage(e));
             }
         });
     }
@@ -96,8 +96,8 @@ final class WebRtcClient {
                 pollOfferLoop();
                 pollIceLoop();
                 notifyState("正在建立实时连接...");
-            } catch (Exception e) {
-                notifyState("WebRTC 启动失败：" + e.getMessage());
+            } catch (Throwable e) {
+                notifyState("WebRTC 启动失败：" + safeMessage(e));
             }
         });
     }
@@ -279,6 +279,11 @@ final class WebRtcClient {
         if (listener != null) {
             main.post(() -> listener.onState(text));
         }
+    }
+
+    private String safeMessage(Throwable error) {
+        String message = error.getMessage();
+        return message == null || message.isEmpty() ? error.getClass().getSimpleName() : message;
     }
 
     private final PeerConnection.Observer observer = new PeerConnection.Observer() {

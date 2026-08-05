@@ -7,6 +7,7 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -60,7 +61,7 @@ public class CaptureService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(1, buildNotification());
+        showForeground();
         baseUrl = intent.getStringExtra(EXTRA_BASE_URL);
         pairCode = intent.getStringExtra(EXTRA_PAIR_CODE);
         authToken = intent.getStringExtra(EXTRA_AUTH_TOKEN);
@@ -72,6 +73,15 @@ public class CaptureService extends Service {
         }
         startProjection(resultCode, resultData);
         return START_STICKY;
+    }
+
+    private void showForeground() {
+        Notification notification = buildNotification();
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+        } else {
+            startForeground(1, notification);
+        }
     }
 
     @Override

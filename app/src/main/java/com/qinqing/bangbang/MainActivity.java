@@ -125,8 +125,9 @@ public class MainActivity extends Activity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_CAPTURE && resultCode == RESULT_OK && data != null) {
+            publishHelpRequest();
             startCaptureService(resultCode, data);
-            setStatus("已开始实时屏幕协助。需要停止时，点下面的红色按钮。");
+            setStatus("已开始实时屏幕协助，正在等待家属连接。");
         } else if (requestCode == REQUEST_CAPTURE) {
             setStatus("你取消了屏幕共享授权。");
         }
@@ -458,7 +459,11 @@ public class MainActivity extends Activity {
         if (!ensureOverlayReady()) {
             return;
         }
-        setStatus("正在发送协助请求...");
+        setStatus("正在打开屏幕共享授权...");
+        requestScreenCapturePermission();
+    }
+
+    private void publishHelpRequest() {
         io.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
@@ -468,7 +473,6 @@ public class MainActivity extends Activity {
                         .put("deviceName", Build.MANUFACTURER + " " + Build.MODEL)
                         .put("masked", isPrivacyMasked());
                 NetworkClient.postJson(baseUrl, "/api/help", payload);
-                main.post(this::requestScreenCapturePermission);
             } catch (Exception e) {
                 main.post(() -> setStatus("发送失败：" + e.getMessage()));
             }

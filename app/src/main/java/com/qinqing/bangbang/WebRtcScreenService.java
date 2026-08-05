@@ -4,6 +4,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.Service;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
 
@@ -24,7 +25,7 @@ public class WebRtcScreenService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(2, buildNotification("正在建立实时屏幕连接"));
+        showForeground("正在建立实时屏幕连接");
         Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA);
         String baseUrl = intent.getStringExtra(EXTRA_BASE_URL);
         String pairCode = intent.getStringExtra(EXTRA_PAIR_CODE);
@@ -37,7 +38,7 @@ public class WebRtcScreenService extends Service {
             client = new WebRtcClient(this, baseUrl, pairCode, authToken, new WebRtcClient.Listener() {
                 @Override
                 public void onState(String text) {
-                    startForeground(2, buildNotification(text));
+                    showForeground(text);
                 }
 
                 @Override
@@ -47,6 +48,15 @@ public class WebRtcScreenService extends Service {
             client.startElder(resultData);
         }
         return START_STICKY;
+    }
+
+    private void showForeground(String text) {
+        Notification notification = buildNotification(text);
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(2, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
+        } else {
+            startForeground(2, notification);
+        }
     }
 
     @Override
