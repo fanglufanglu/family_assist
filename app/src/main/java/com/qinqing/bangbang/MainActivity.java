@@ -58,7 +58,6 @@ public class MainActivity extends Activity {
     private static final long HELP_CONNECT_TIMEOUT_MS = 90_000;
     private static final long ACTION_BUTTON_RESET_MS = 1800;
     private static final long ANNOTATION_THROTTLE_MS = 850;
-    private static final boolean USE_WEBRTC = false;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService statusIo = Executors.newSingleThreadExecutor();
@@ -170,12 +169,11 @@ public class MainActivity extends Activity {
                     .putLong("assistStartedAtMs", System.currentTimeMillis())
                     .apply();
             ensureOverlayReady();
-            if (USE_WEBRTC) {
-                publishHelpRequest(() -> {
-                    startCaptureService(resultCode, data);
-                    showElder();
-                    setStatus("实时协助已开始，家属正在连接。需要结束时点“停止协助”。");
-                });
+            if (isWebRtcEnabled()) {
+                startCaptureService(resultCode, data);
+                publishHelpRequest();
+                showElder();
+                setStatus("实时协助已开始，家属正在连接。需要结束时点“停止协助”。");
             } else {
                 startCaptureService(resultCode, data);
                 publishHelpRequest();
@@ -238,11 +236,20 @@ public class MainActivity extends Activity {
         EditText codeInput = input("家庭码", pairCode);
         EditText nameInput = input("我的显示名称", displayName);
         Button saveButton = primaryButton("保存设置");
+        Button webRtcButton = secondaryButton(webRtcButtonText());
         Button backButton = secondaryButton("返回首页");
 
         saveButton.setOnClickListener(v -> {
             saveSetup(serverInput, codeInput, nameInput);
             setStatus("设置已保存。");
+        });
+        webRtcButton.setOnClickListener(v -> {
+            boolean next = !prefs.getBoolean("webRtcEnabled", false);
+            prefs.edit().putBoolean("webRtcEnabled", next).apply();
+            webRtcButton.setText(webRtcButtonText());
+            setStatus(next
+                    ? "实时模式已开启。请在两台手机都开启后再测试；如发生异常，关闭后会回到稳定模式。"
+                    : "实时模式已关闭，当前使用稳定的截图协助模式。");
         });
         backButton.setOnClickListener(v -> showSetup());
 
@@ -254,6 +261,7 @@ public class MainActivity extends Activity {
         connectionCard.addView(label("显示名称"));
         connectionCard.addView(nameInput);
         connectionCard.addView(saveButton);
+        connectionCard.addView(webRtcButton);
         root.addView(connectionCard);
         root.addView(status);
         root.addView(backButton);
@@ -438,7 +446,8 @@ public class MainActivity extends Activity {
         root.addView(hero("家属模式", "看屏幕，点一下提示长辈"));
         root.addView(statusPill(bindingStatusText()));
         status = notice("正在等待长辈发起协助。看到画面后，点需要长辈点击的位置。");
-        View screenView = USE_WEBRTC ? buildRtcView() : buildFrameView();
+        boolean useWebRtc = isWebRtcEnabled();
+        View screenView = useWebRtc ? buildRtcView() : buildFrameView();
 
         Button controlRequestButton = secondaryButton("请求远程点击授权");
         Button refreshButton = primaryButton("立即刷新");
@@ -457,7 +466,7 @@ public class MainActivity extends Activity {
             showSetup();
         });
 
-        LinearLayout screenCard = card(USE_WEBRTC ? "长辈实时屏幕" : "长辈屏幕", "点画面位置会发送红圈提示；长辈授权后，也会自动帮长辈点击。");
+        LinearLayout screenCard = card(useWebRtc ? "长辈实时屏幕" : "长辈屏幕", "点画面位置会发送红圈提示；长辈授权后，也会自动帮长辈点击。");
         screenCard.addView(screenView);
         root.addView(screenCard);
         root.addView(status);
@@ -465,7 +474,7 @@ public class MainActivity extends Activity {
         root.addView(refreshButton);
         root.addView(backButton);
         setContentView(scroll(root));
-        if (USE_WEBRTC) {
+        if (useWebRtc) {
             startFamilyWebRtc();
         }
         pollFamilyLoop();
@@ -690,8 +699,9 @@ public class MainActivity extends Activity {
     }
 
     private void startCaptureService(int resultCode, Intent data) {
-        Intent intent = USE_WEBRTC ? new Intent(this, WebRtcScreenService.class) : new Intent(this, CaptureService.class);
-        if (USE_WEBRTC) {
+        boolean useWebRtc = isWebRtcEnabled();
+        Intent intent = useWebRtc ? new Intent(this, WebRtcScreenService.class) : new Intent(this, CaptureService.class);
+        if (useWebRtc) {
             intent.putExtra(WebRtcScreenService.EXTRA_BASE_URL, baseUrl);
             intent.putExtra(WebRtcScreenService.EXTRA_PAIR_CODE, pairCode);
             intent.putExtra(WebRtcScreenService.EXTRA_AUTH_TOKEN, authToken);
@@ -798,7 +808,7 @@ public class MainActivity extends Activity {
                         setStatus(elderName + " 正在协助中。" + controlText + " 最后更新：" + updatedAt);
                     }
                 });
-                if (!USE_WEBRTC) {
+                if (!isWebRtcEnabled()) {
                     requestLatestFrame(encoded, token, frameUpdatedAt);
                 }
             } catch (Exception e) {
@@ -1261,6 +1271,9 @@ public class MainActivity extends Activity {
         if (!prefs.contains("remoteControlAllowed")) {
             editor.putBoolean("remoteControlAllowed", false);
         }
+        if (!prefs.contains("webRtcEnabled")) {
+            editor.putBoolean("webRtcEnabled", false);
+        }
         editor.apply();
     }
 
@@ -1353,6 +1366,14 @@ public class MainActivity extends Activity {
 
     private String accessibilityButtonText() {
         return isAccessibilityServiceEnabled() ? "辅助服务：已开启" : "可选：开启敏感保护和远程点击";
+    }
+
+    private boolean isWebRtcEnabled() {
+        return prefs.getBoolean("webRtcEnabled", false);
+    }
+
+    private String webRtcButtonText() {
+        return isWebRtcEnabled() ? "实时模式(WebRTC)：已开启" : "实时模式(WebRTC)：关闭";
     }
 
     private String elderPrimaryButtonText() {

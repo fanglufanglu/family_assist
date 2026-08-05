@@ -8,8 +8,6 @@ import android.os.Looper;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
-import org.webrtc.AudioSource;
-import org.webrtc.AudioTrack;
 import org.webrtc.DefaultVideoDecoderFactory;
 import org.webrtc.DefaultVideoEncoderFactory;
 import org.webrtc.EglBase;
@@ -130,9 +128,12 @@ final class WebRtcClient {
                 PeerConnectionFactory.InitializationOptions.builder(context)
                         .createInitializationOptions()
         );
-        DefaultVideoEncoderFactory encoderFactory = new DefaultVideoEncoderFactory(eglBase.getEglBaseContext(), true, true);
+        PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
+        options.disableNetworkMonitor = true;
+        DefaultVideoEncoderFactory encoderFactory = new DefaultVideoEncoderFactory(eglBase.getEglBaseContext(), false, false);
         DefaultVideoDecoderFactory decoderFactory = new DefaultVideoDecoderFactory(eglBase.getEglBaseContext());
         factory = PeerConnectionFactory.builder()
+                .setOptions(options)
                 .setVideoEncoderFactory(encoderFactory)
                 .setVideoDecoderFactory(decoderFactory)
                 .createPeerConnectionFactory();
@@ -157,11 +158,6 @@ final class WebRtcClient {
         capturer.startCapture(540, 960, 18);
         VideoTrack videoTrack = factory.createVideoTrack("elder-screen", videoSource);
         peerConnection.addTrack(videoTrack, Collections.singletonList("assist"));
-
-        AudioSource audioSource = factory.createAudioSource(new MediaConstraints());
-        AudioTrack audioTrack = factory.createAudioTrack("elder-audio", audioSource);
-        audioTrack.setEnabled(false);
-        peerConnection.addTrack(audioTrack, Collections.singletonList("assist"));
     }
 
     private void createOffer() {
