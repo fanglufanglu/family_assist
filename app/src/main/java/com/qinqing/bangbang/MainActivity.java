@@ -793,7 +793,7 @@ public class MainActivity extends Activity {
             try {
                 JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
                 JSONObject family = result.optJSONObject("family");
-                if (family != null && family.optInt("memberCount", 0) >= 2) {
+                if (family != null && !family.optBoolean("invitePending", true)) {
                     prefs.edit()
                             .putBoolean("familyBound", true)
                             .remove("pendingInviteCode")

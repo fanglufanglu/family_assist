@@ -73,6 +73,8 @@ function publicFamily(family) {
     controlRequested: family.controlRequested,
     controlAllowed: family.controlAllowed,
     controlUpdatedAt: family.controlUpdatedAt,
+    invitePending: Boolean(family.inviteCode) && Date.now() <= family.inviteExpiresAt,
+    inviteExpiresAt: family.inviteExpiresAt,
     memberCount: family.members.size,
   };
 }
