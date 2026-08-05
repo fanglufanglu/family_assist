@@ -105,11 +105,26 @@ const server = http.createServer(async (req, res) => {
       }
       const family = familyFor(pairCode);
       const elderToken = makeToken();
+      family.members.clear();
       family.inviteCode = makeInviteCode();
       family.inviteExpiresAt = Date.now() + 10 * 60 * 1000;
       family.elderName = String(payload.elderName || "长辈");
       family.deviceName = String(payload.deviceName || "");
       family.updatedAt = new Date().toISOString();
+      family.active = false;
+      family.annotation = null;
+      family.controlRequested = false;
+      family.controlAllowed = false;
+      family.controlAction = null;
+      family.frame = null;
+      family.frameUpdatedAt = "";
+      family.webrtc = {
+        offer: null,
+        answer: null,
+        elderIce: [],
+        familyIce: [],
+        updatedAt: family.updatedAt,
+      };
       family.members.set(elderToken, {
         role: "elder",
         name: family.elderName,

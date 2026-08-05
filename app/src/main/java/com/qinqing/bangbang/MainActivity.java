@@ -45,6 +45,7 @@ public class MainActivity extends Activity {
     private static final String DEFAULT_RELAY_URL = "https://super-duper-funicular-44776x6g7hjvwj-8787.app.github.dev";
     private static final String DEFAULT_PAIR_CODE = "family001";
     private static final long FRESH_FRAME_MS = 2500;
+    private static final boolean USE_WEBRTC = false;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
@@ -360,36 +361,8 @@ public class MainActivity extends Activity {
         root = verticalRoot();
         root.addView(hero("家属模式", "看屏幕，点一下提示长辈"));
         root.addView(statusPill(bindingStatusText()));
-        status = notice("正在等待长辈发起协助。实时画面出现后，点需要长辈点击的位置。");
-        rtcView = new SurfaceViewRenderer(this);
-        rtcView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT);
-        rtcView.setMirror(false);
-        rtcView.setEnableHardwareScaler(true);
-        rtcView.setBackgroundColor(0xFF0F172A);
-        rtcView.setMinimumHeight(dp(420));
-        rtcView.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(460)
-        ));
-        rtcView.setOnTouchListener((view, event) -> {
-            if (event.getAction() == MotionEvent.ACTION_UP) {
-                long age = System.currentTimeMillis() - lastFrameReceivedAtMs;
-                if (!rtcVideoReady && (lastFrameReceivedAtMs == 0 || age > FRESH_FRAME_MS)) {
-                    setStatus("实时画面正在连接，请等画面出现后再点。");
-                    pollFamilyOnce();
-                    return true;
-                }
-                float[] point = normalizedViewPoint(rtcView, event.getX(), event.getY());
-                float x = point[0];
-                float y = point[1];
-                sendAnnotation(x, y);
-                if (familyControlAllowed) {
-                    sendRemoteTap(x, y);
-                }
-                return true;
-            }
-            return true;
-        });
+        status = notice("正在等待长辈发起协助。看到画面后，点需要长辈点击的位置。");
+        View screenView = USE_WEBRTC ? buildRtcView() : buildFrameView();
 
         Button controlRequestButton = secondaryButton("请求远程点击授权");
         Button refreshButton = primaryButton("立即刷新");
@@ -402,16 +375,78 @@ public class MainActivity extends Activity {
             showSetup();
         });
 
-        LinearLayout screenCard = card("长辈实时屏幕", "点画面位置会发送红圈提示；长辈授权后，也会自动帮长辈点击。");
-        screenCard.addView(rtcView);
+        LinearLayout screenCard = card(USE_WEBRTC ? "长辈实时屏幕" : "长辈屏幕", "点画面位置会发送红圈提示；长辈授权后，也会自动帮长辈点击。");
+        screenCard.addView(screenView);
         root.addView(screenCard);
         root.addView(status);
         root.addView(controlRequestButton);
         root.addView(refreshButton);
         root.addView(backButton);
         setContentView(scroll(root));
-        startFamilyWebRtc();
+        if (USE_WEBRTC) {
+            startFamilyWebRtc();
+        }
         pollFamilyLoop();
+    }
+
+    private View buildFrameView() {
+        frameView = new ImageView(this);
+        frameView.setAdjustViewBounds(true);
+        frameView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        frameView.setBackground(rounded(0xFFF3F6FA, dp(18), COLOR_LINE));
+        frameView.setPadding(dp(8), dp(8), dp(8), dp(8));
+        frameView.setMinimumHeight(dp(320));
+        frameView.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+        frameView.setOnTouchListener((view, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_UP && frameView.getDrawable() != null) {
+                long age = System.currentTimeMillis() - lastFrameReceivedAtMs;
+                if (lastFrameReceivedAtMs == 0 || age > FRESH_FRAME_MS) {
+                    setStatus("屏幕画面正在刷新，请等画面稳定后再点。");
+                    pollFamilyOnce();
+                    return true;
+                }
+                float[] point = normalizedImagePoint(frameView, event.getX(), event.getY());
+                sendAnnotation(point[0], point[1]);
+                if (familyControlAllowed) {
+                    sendRemoteTap(point[0], point[1]);
+                }
+                return true;
+            }
+            return true;
+        });
+        return frameView;
+    }
+
+    private View buildRtcView() {
+        rtcView = new SurfaceViewRenderer(this);
+        rtcView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT);
+        rtcView.setMirror(false);
+        rtcView.setEnableHardwareScaler(true);
+        rtcView.setBackgroundColor(0xFF0F172A);
+        rtcView.setMinimumHeight(dp(420));
+        rtcView.setLayoutParams(new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(460)
+        ));
+        rtcView.setOnTouchListener((view, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_UP) {
+                if (!rtcVideoReady) {
+                    setStatus("实时画面正在连接，请等画面出现后再点。");
+                    return true;
+                }
+                float[] point = normalizedViewPoint(rtcView, event.getX(), event.getY());
+                sendAnnotation(point[0], point[1]);
+                if (familyControlAllowed) {
+                    sendRemoteTap(point[0], point[1]);
+                }
+                return true;
+            }
+            return true;
+        });
+        return rtcView;
     }
 
     private void showFamilyBind() {
@@ -541,11 +576,19 @@ public class MainActivity extends Activity {
     }
 
     private void startCaptureService(int resultCode, Intent data) {
-        Intent intent = new Intent(this, WebRtcScreenService.class);
-        intent.putExtra(WebRtcScreenService.EXTRA_BASE_URL, baseUrl);
-        intent.putExtra(WebRtcScreenService.EXTRA_PAIR_CODE, pairCode);
-        intent.putExtra(WebRtcScreenService.EXTRA_AUTH_TOKEN, authToken);
-        intent.putExtra(WebRtcScreenService.EXTRA_RESULT_DATA, data);
+        Intent intent = USE_WEBRTC ? new Intent(this, WebRtcScreenService.class) : new Intent(this, CaptureService.class);
+        if (USE_WEBRTC) {
+            intent.putExtra(WebRtcScreenService.EXTRA_BASE_URL, baseUrl);
+            intent.putExtra(WebRtcScreenService.EXTRA_PAIR_CODE, pairCode);
+            intent.putExtra(WebRtcScreenService.EXTRA_AUTH_TOKEN, authToken);
+            intent.putExtra(WebRtcScreenService.EXTRA_RESULT_DATA, data);
+        } else {
+            intent.putExtra(CaptureService.EXTRA_BASE_URL, baseUrl);
+            intent.putExtra(CaptureService.EXTRA_PAIR_CODE, pairCode);
+            intent.putExtra(CaptureService.EXTRA_AUTH_TOKEN, authToken);
+            intent.putExtra(CaptureService.EXTRA_RESULT_CODE, resultCode);
+            intent.putExtra(CaptureService.EXTRA_RESULT_DATA, data);
+        }
         if (Build.VERSION.SDK_INT >= 26) {
             startForegroundService(intent);
         } else {
@@ -627,10 +670,19 @@ public class MainActivity extends Activity {
                 }
                 String elderName = help.optString("elderName", "长辈");
                 String updatedAt = help.optString("updatedAt", "");
+                Bitmap bitmap = null;
+                if (!USE_WEBRTC) {
+                    bitmap = NetworkClient.getJpeg(baseUrl, "/api/frame?pairCode=" + encoded + "&authToken=" + token + "&t=" + System.currentTimeMillis());
+                }
+                Bitmap latestBitmap = bitmap;
                 main.post(() -> {
                     String controlText = familyControlAllowed ? "远程点击已授权。" : "未授权远程点击。";
                     setStatus(elderName + " 正在请求协助。" + controlText + " 最后更新：" + updatedAt);
                     lastFrameUpdatedAt = updatedAt;
+                    if (latestBitmap != null && frameView != null) {
+                        lastFrameReceivedAtMs = System.currentTimeMillis();
+                        frameView.setImageBitmap(latestBitmap);
+                    }
                 });
             } catch (Exception e) {
                 main.post(() -> setStatus("连接 relay 失败：" + e.getMessage()));
