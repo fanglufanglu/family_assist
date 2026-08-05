@@ -6,7 +6,10 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.graphics.Bitmap;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
@@ -51,6 +54,17 @@ public class MainActivity extends Activity {
     private boolean familyPolling;
     private boolean elderAnnotationPolling;
 
+    private static final int COLOR_BG = 0xFFFFFBF7;
+    private static final int COLOR_SURFACE = 0xFFFFFFFF;
+    private static final int COLOR_TEXT = 0xFF172033;
+    private static final int COLOR_MUTED = 0xFF697386;
+    private static final int COLOR_LINE = 0xFFE7E0D8;
+    private static final int COLOR_BLUE = 0xFF2563EB;
+    private static final int COLOR_BLUE_DARK = 0xFF1D4ED8;
+    private static final int COLOR_GREEN = 0xFF12B981;
+    private static final int COLOR_RED = 0xFFDC2626;
+    private static final int COLOR_WARM = 0xFFFFF1E8;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -92,18 +106,19 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         root = verticalRoot();
 
-        TextView title = title("亲情帮帮");
-        TextView subtitle = body("同一个 APP 支持长辈和家属两种模式。先完成亲属绑定，再发起协助。");
-        EditText serverInput = input("Relay 地址，例如 http://192.168.1.10:8787", baseUrl);
+        root.addView(hero("亲情帮帮", "看得见爸妈手机，远程画圈教操作"));
+        root.addView(statusPill(bindingStatusText()));
+
+        EditText serverInput = input("例如 https://xxxx-8787.app.github.dev", baseUrl);
         EditText codeInput = input("家庭码，例如 family001", pairCode);
         EditText nameInput = input("显示名称，例如 妈妈 / 女儿", displayName);
         EditText inviteInput = input("家属输入长辈给的 6 位绑定码", "");
-        status = body(bindingStatusText());
+        status = notice("先设置 Relay 地址和家庭码，再完成亲属绑定。");
 
-        Button inviteButton = primaryButton("长辈：生成亲属绑定码");
-        Button bindButton = secondaryButton("家属：用绑定码绑定长辈");
-        Button elderButton = primaryButton("我是长辈，找家人帮忙");
-        Button familyButton = secondaryButton("我是家属，等待协助请求");
+        Button inviteButton = primaryButton("生成长辈绑定码");
+        Button bindButton = secondaryButton("绑定这位长辈");
+        Button elderButton = primaryButton("进入长辈模式");
+        Button familyButton = secondaryButton("进入家属模式");
 
         inviteButton.setOnClickListener(v -> {
             saveSetup(serverInput, codeInput, nameInput);
@@ -122,19 +137,23 @@ public class MainActivity extends Activity {
             showFamily();
         });
 
-        root.addView(title);
-        root.addView(subtitle);
-        root.addView(label("Relay 地址"));
-        root.addView(serverInput);
-        root.addView(label("家庭码"));
-        root.addView(codeInput);
-        root.addView(label("我的显示名称"));
-        root.addView(nameInput);
+        LinearLayout connectionCard = card("连接设置", "两台手机填写同一个 Relay 地址和家庭码。");
+        connectionCard.addView(label("Relay 地址"));
+        connectionCard.addView(serverInput);
+        connectionCard.addView(label("家庭码"));
+        connectionCard.addView(codeInput);
+        connectionCard.addView(label("我的显示名称"));
+        connectionCard.addView(nameInput);
+        root.addView(connectionCard);
+
+        LinearLayout bindCard = card("亲属绑定", "长辈生成 6 位码，家属输入后才能查看协助请求。");
+        bindCard.addView(inviteButton);
+        bindCard.addView(label("亲属绑定码"));
+        bindCard.addView(inviteInput);
+        bindCard.addView(bindButton);
+        root.addView(bindCard);
+
         root.addView(status);
-        root.addView(inviteButton);
-        root.addView(label("亲属绑定码"));
-        root.addView(inviteInput);
-        root.addView(bindButton);
         root.addView(elderButton);
         root.addView(familyButton);
         setContentView(scroll(root));
@@ -144,12 +163,12 @@ public class MainActivity extends Activity {
         familyPolling = false;
         elderAnnotationPolling = true;
         root = verticalRoot();
-        root.addView(title("长辈模式"));
-        root.addView(body("点下面的大按钮后，已绑定家属可以看到你的屏幕截图流。遇到密码、验证码、支付页面时，请打开隐私遮罩。"));
-        status = body("尚未发起协助。");
+        root.addView(hero("长辈模式", "需要帮忙时，只点一个按钮"));
+        root.addView(statusPill(bindingStatusText()));
+        status = notice("尚未发起协助。家属不能主动进入你的手机。");
 
         Button helpButton = primaryButton("找家人帮忙");
-        helpButton.setTextSize(26);
+        helpButton.setTextSize(24);
         Button privacyButton = secondaryButton(privacyButtonText());
         Button overlayButton = secondaryButton("开启画圈浮层");
         Button accessibilityButton = secondaryButton("开启敏感页面自动检测");
@@ -176,11 +195,15 @@ public class MainActivity extends Activity {
             showSetup();
         });
 
-        root.addView(status);
         root.addView(helpButton);
-        root.addView(privacyButton);
-        root.addView(overlayButton);
-        root.addView(accessibilityButton);
+
+        LinearLayout safetyCard = card("隐私保护", "遇到验证码、支付、银行卡页面时，家属端会看到保护画面。");
+        safetyCard.addView(privacyButton);
+        safetyCard.addView(accessibilityButton);
+        safetyCard.addView(overlayButton);
+        root.addView(safetyCard);
+
+        root.addView(status);
         root.addView(stopButton);
         root.addView(backButton);
         setContentView(scroll(root));
@@ -194,12 +217,13 @@ public class MainActivity extends Activity {
         familyPolling = true;
         elderAnnotationPolling = false;
         root = verticalRoot();
-        root.addView(title("家属模式"));
-        root.addView(body("保持此页打开。收到长辈请求后，会显示最近一张屏幕截图。点截图上的位置，即可在长辈手机上画圈提示。"));
-        status = body("正在等待协助请求...");
+        root.addView(hero("家属模式", "看屏幕，点一下，长辈那边会出现红圈"));
+        root.addView(statusPill(bindingStatusText()));
+        status = notice("正在等待长辈发起协助...");
         frameView = new ImageView(this);
         frameView.setAdjustViewBounds(true);
-        frameView.setBackgroundColor(0xFFE5E7EB);
+        frameView.setBackground(rounded(0xFFF3F6FA, dp(18), COLOR_LINE));
+        frameView.setPadding(dp(8), dp(8), dp(8), dp(8));
         frameView.setMinimumHeight(dp(320));
         frameView.setLayoutParams(new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -223,8 +247,10 @@ public class MainActivity extends Activity {
             showSetup();
         });
 
+        LinearLayout screenCard = card("长辈屏幕", "点截图上的位置发送“请点这里”的画圈提示。");
+        screenCard.addView(frameView);
+        root.addView(screenCard);
         root.addView(status);
-        root.addView(frameView);
         root.addView(refreshButton);
         root.addView(backButton);
         setContentView(scroll(root));
@@ -487,40 +513,143 @@ public class MainActivity extends Activity {
     private LinearLayout verticalRoot() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dp(20), dp(28), dp(20), dp(28));
+        layout.setPadding(dp(18), dp(22), dp(18), dp(28));
         layout.setGravity(Gravity.CENTER_HORIZONTAL);
+        layout.setBackgroundColor(COLOR_BG);
         return layout;
     }
 
     private ScrollView scroll(View child) {
         ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(COLOR_BG);
         scroll.addView(child);
         return scroll;
+    }
+
+    private LinearLayout hero(String heading, String subheading) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setGravity(Gravity.CENTER_HORIZONTAL);
+        layout.setPadding(dp(18), dp(22), dp(18), dp(22));
+        layout.setBackground(gradientHero());
+        LinearLayout.LayoutParams params = fullWidthParams();
+        params.setMargins(0, 0, 0, dp(14));
+        layout.setLayoutParams(params);
+
+        TextView logo = new TextView(this);
+        logo.setText("亲");
+        logo.setGravity(Gravity.CENTER);
+        logo.setTextSize(24);
+        logo.setTypeface(Typeface.DEFAULT_BOLD);
+        logo.setTextColor(COLOR_BLUE_DARK);
+        logo.setBackground(rounded(0xFFFFFFFF, dp(20), 0x00FFFFFF));
+        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(56), dp(56));
+        logoParams.setMargins(0, 0, 0, dp(12));
+        layout.addView(logo, logoParams);
+
+        TextView title = title(heading);
+        title.setTextColor(0xFFFFFFFF);
+        layout.addView(title);
+
+        TextView body = body(subheading);
+        body.setGravity(Gravity.CENTER);
+        body.setTextColor(0xEFFFFFFF);
+        body.setPadding(0, dp(2), 0, 0);
+        layout.addView(body);
+        return layout;
+    }
+
+    private LinearLayout card(String heading, String subheading) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(16), dp(16), dp(16), dp(16));
+        layout.setBackground(rounded(COLOR_SURFACE, dp(18), COLOR_LINE));
+        LinearLayout.LayoutParams params = fullWidthParams();
+        params.setMargins(0, 0, 0, dp(14));
+        layout.setLayoutParams(params);
+
+        TextView title = sectionTitle(heading);
+        TextView body = caption(subheading);
+        layout.addView(title);
+        layout.addView(body);
+        return layout;
     }
 
     private TextView title(String text) {
         TextView view = new TextView(this);
         view.setText(text);
-        view.setTextSize(30);
-        view.setTextColor(0xFF111827);
+        view.setTextSize(28);
+        view.setTextColor(COLOR_TEXT);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
         view.setGravity(Gravity.CENTER);
-        view.setPadding(0, 0, 0, dp(16));
+        view.setPadding(0, 0, 0, dp(4));
+        return view;
+    }
+
+    private TextView sectionTitle(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextSize(18);
+        view.setTextColor(COLOR_TEXT);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setPadding(0, 0, 0, dp(4));
         return view;
     }
 
     private TextView body(String text) {
         TextView view = new TextView(this);
         view.setText(text);
-        view.setTextSize(18);
-        view.setTextColor(0xFF374151);
-        view.setPadding(0, dp(6), 0, dp(12));
+        view.setTextSize(17);
+        view.setTextColor(COLOR_MUTED);
+        view.setLineSpacing(dp(2), 1.0f);
+        view.setPadding(0, dp(4), 0, dp(10));
+        return view;
+    }
+
+    private TextView caption(String text) {
+        TextView view = body(text);
+        view.setTextSize(14);
+        view.setPadding(0, 0, 0, dp(12));
+        return view;
+    }
+
+    private TextView notice(String text) {
+        TextView view = body(text);
+        view.setTextSize(15);
+        view.setTextColor(0xFF4B5563);
+        view.setPadding(dp(14), dp(12), dp(14), dp(12));
+        view.setBackground(rounded(0xFFF8FAFC, dp(14), COLOR_LINE));
+        LinearLayout.LayoutParams params = fullWidthParams();
+        params.setMargins(0, 0, 0, dp(12));
+        view.setLayoutParams(params);
+        return view;
+    }
+
+    private TextView statusPill(String text) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextSize(14);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setTextColor(COLOR_BLUE_DARK);
+        view.setGravity(Gravity.CENTER);
+        view.setPadding(dp(14), dp(8), dp(14), dp(8));
+        view.setBackground(rounded(0xFFEFF6FF, dp(999), 0xFFBFDBFE));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        params.setMargins(0, 0, 0, dp(14));
+        view.setLayoutParams(params);
         return view;
     }
 
     private TextView label(String text) {
-        TextView view = body(text);
-        view.setTextSize(15);
-        view.setPadding(0, dp(12), 0, dp(4));
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextSize(14);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        view.setTextColor(COLOR_TEXT);
+        view.setPadding(0, dp(8), 0, dp(6));
         return view;
     }
 
@@ -528,34 +657,40 @@ public class MainActivity extends Activity {
         EditText view = new EditText(this);
         view.setHint(hint);
         view.setText(value);
-        view.setTextSize(18);
+        view.setTextSize(16);
+        view.setTextColor(COLOR_TEXT);
+        view.setHintTextColor(0xFF9AA4B2);
         view.setSingleLine(true);
-        view.setPadding(dp(12), dp(8), dp(12), dp(8));
+        view.setPadding(dp(14), dp(10), dp(14), dp(10));
+        view.setBackground(rounded(0xFFF8FAFC, dp(12), COLOR_LINE));
+        view.setLayoutParams(fullWidthParams());
         return view;
     }
 
     private Button primaryButton(String text) {
         Button button = new Button(this);
         button.setText(text);
-        button.setTextSize(18);
+        button.setTextSize(17);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setAllCaps(false);
         button.setTextColor(0xFFFFFFFF);
-        button.setBackgroundColor(0xFF2563EB);
-        button.setPadding(dp(10), dp(12), dp(10), dp(12));
+        button.setBackground(rounded(COLOR_BLUE, dp(14), COLOR_BLUE));
+        button.setMinHeight(dp(54));
+        button.setPadding(dp(12), dp(10), dp(12), dp(10));
         button.setLayoutParams(buttonParams());
         return button;
     }
 
     private Button secondaryButton(String text) {
         Button button = primaryButton(text);
-        button.setTextColor(0xFF111827);
-        button.setBackgroundColor(0xFFE5E7EB);
+        button.setTextColor(COLOR_BLUE_DARK);
+        button.setBackground(rounded(0xFFEFF6FF, dp(14), 0xFFBFDBFE));
         return button;
     }
 
     private Button dangerButton(String text) {
         Button button = primaryButton(text);
-        button.setBackgroundColor(0xFFDC2626);
+        button.setBackground(rounded(COLOR_RED, dp(14), COLOR_RED));
         return button;
     }
 
@@ -566,6 +701,32 @@ public class MainActivity extends Activity {
         );
         params.setMargins(0, dp(10), 0, dp(4));
         return params;
+    }
+
+    private LinearLayout.LayoutParams fullWidthParams() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+    }
+
+    private GradientDrawable rounded(int fillColor, int radius, int strokeColor) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fillColor);
+        drawable.setCornerRadius(radius);
+        if (Color.alpha(strokeColor) != 0) {
+            drawable.setStroke(dp(1), strokeColor);
+        }
+        return drawable;
+    }
+
+    private GradientDrawable gradientHero() {
+        GradientDrawable drawable = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{0xFFFF7A59, 0xFFFF5F7E, 0xFF2F80ED}
+        );
+        drawable.setCornerRadius(dp(24));
+        return drawable;
     }
 
     private int dp(int value) {

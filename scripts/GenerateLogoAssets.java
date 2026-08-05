@@ -1,12 +1,10 @@
 import javax.imageio.ImageIO;
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.GradientPaint;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.GeneralPath;
-import java.awt.geom.Path2D;
 import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -32,7 +30,7 @@ public class GenerateLogoAssets {
         Graphics2D g = image.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-        g.setPaint(new GradientPaint(130f * (float) s, 110f * (float) s, c(0xff7a59), 880f * (float) s, 914f * (float) s, c(0x3b82f6)));
+        g.setPaint(new GradientPaint(120f * (float) s, 90f * (float) s, c(0xff7a59), 900f * (float) s, 930f * (float) s, c(0x2f80ed)));
         g.fill(new RoundRectangle2D.Double(0, 0, size, size, 232 * s, 232 * s));
 
         GeneralPath heart = new GeneralPath();
@@ -48,27 +46,16 @@ public class GenerateLogoAssets {
         g.setColor(c(0xfff7ed));
         g.fill(heart);
 
-        drawPhone(g, 342 * s, 348 * s, 158 * s, 286 * s, 40 * s, c(0x2563eb), c(0xdbeafe));
-        drawPhone(g, 524 * s, 348 * s, 158 * s, 286 * s, 40 * s, c(0xef4444), c(0xffe4e6));
+        drawPhone(g, 312 * s, 360 * s, 188 * s, 292 * s, 48 * s, c(0x2563eb), c(0xdbeafe));
+        drawPhone(g, 524 * s, 360 * s, 188 * s, 292 * s, 48 * s, c(0xef4444), c(0xffe4e6));
 
-        Path2D arrow = new Path2D.Double();
-        arrow.moveTo(462 * s, 462 * s);
-        arrow.curveTo(500 * s, 502 * s, 552 * s, 514 * s, 605 * s, 503 * s);
-        g.setColor(c(0x111827));
-        g.setStroke(new BasicStroke((float) (30 * s), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        g.draw(arrow);
+        g.setColor(c(0xfff7ed));
+        g.fill(new RoundRectangle2D.Double(476 * s, 468 * s, 72 * s, 96 * s, 36 * s, 36 * s));
 
-        Path2D head = new Path2D.Double();
-        head.moveTo(589 * s, 389 * s);
-        head.lineTo(641 * s, 431 * s);
-        head.lineTo(580 * s, 461 * s);
-        g.draw(head);
-
-        g.setColor(c(0x10b981));
-        g.fill(new Ellipse2D.Double(462 * s, 472 * s, 100 * s, 100 * s));
+        g.setColor(c(0x12b981));
+        g.fill(new Ellipse2D.Double(462 * s, 460 * s, 100 * s, 100 * s));
         g.setColor(Color.WHITE);
-        g.setStroke(new BasicStroke((float) (18 * s)));
-        g.draw(new Ellipse2D.Double(462 * s, 472 * s, 100 * s, 100 * s));
+        g.fill(new Ellipse2D.Double(492 * s, 490 * s, 40 * s, 40 * s));
         g.dispose();
         return image;
     }
