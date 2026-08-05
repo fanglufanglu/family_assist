@@ -58,6 +58,7 @@ public class MainActivity extends Activity {
     private boolean familyPolling;
     private boolean elderAnnotationPolling;
     private boolean familyPollInFlight;
+    private boolean familyControlAllowed;
     private long lastFrameReceivedAtMs;
     private String lastFrameUpdatedAt = "";
 
@@ -86,6 +87,7 @@ public class MainActivity extends Activity {
             deviceId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
             prefs.edit().putString("deviceId", deviceId).apply();
         }
+        seedDefaultSafetyPrefs();
         showSetup();
     }
 
@@ -211,26 +213,38 @@ public class MainActivity extends Activity {
             return;
         }
 
-        Button helpButton = primaryButton("找家人帮忙");
+        Button helpButton = primaryButton("开始协助");
         helpButton.setTextSize(24);
-        Button privacyButton = secondaryButton(privacyButtonText());
-        Button overlayButton = secondaryButton("允许家属画圈提示");
-        Button accessibilityButton = secondaryButton("开启敏感页面自动检测");
+        Button privacyButton = secondaryButton(sensitiveButtonText());
+        Button overlayButton = secondaryButton(annotationButtonText());
+        Button controlButton = secondaryButton(remoteControlButtonText());
+        Button accessibilityButton = secondaryButton("首次准备：打开辅助服务");
         Button stopButton = dangerButton("停止协助");
         Button backButton = secondaryButton("返回首页");
 
         helpButton.setOnClickListener(v -> requestHelpAndCapture());
         privacyButton.setOnClickListener(v -> {
-            boolean next = !prefs.getBoolean("manualPrivacyMask", false);
-            prefs.edit().putBoolean("manualPrivacyMask", next).apply();
-            privacyButton.setText(privacyButtonText());
-            setStatus(next ? "隐私遮罩已打开，家属端将看到保护画面。" : "隐私遮罩已关闭。");
+            boolean next = !prefs.getBoolean("sensitiveDetectionEnabled", true);
+            prefs.edit().putBoolean("sensitiveDetectionEnabled", next).apply();
+            privacyButton.setText(sensitiveButtonText());
+            setStatus(next ? "敏感页面保护已开启。" : "敏感页面保护已关闭。");
         });
-        overlayButton.setOnClickListener(v -> enableAnnotationOverlay());
+        overlayButton.setOnClickListener(v -> {
+            boolean next = !prefs.getBoolean("annotationAllowed", true);
+            prefs.edit().putBoolean("annotationAllowed", next).apply();
+            overlayButton.setText(annotationButtonText());
+            setStatus(next ? "家属画圈提示已允许。" : "家属画圈提示已关闭。");
+        });
+        controlButton.setOnClickListener(v -> {
+            boolean next = !prefs.getBoolean("remoteControlAllowed", false);
+            allowRemoteControl(next);
+            main.postDelayed(() -> controlButton.setText(remoteControlButtonText()), 200);
+        });
         accessibilityButton.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         stopButton.setOnClickListener(v -> {
             stopService(new Intent(this, CaptureService.class));
             stopService(new Intent(this, AnnotationOverlayService.class));
+            prefs.edit().putBoolean("remoteControlAllowed", false).apply();
             endHelpRequest();
             setStatus("已停止协助。");
         });
@@ -241,13 +255,14 @@ public class MainActivity extends Activity {
 
         root.addView(helpButton);
 
-        LinearLayout stepsCard = card("接下来会发生什么", "1. 点“找家人帮忙”。\n2. 允许屏幕共享。\n3. 家属看到屏幕后，会用红圈告诉你点哪里。");
+        LinearLayout stepsCard = card("现在只要做一件事", "点上面的蓝色按钮。第一次使用时，手机会带你完成必要授权；以后再求助会更快。");
         root.addView(stepsCard);
 
-        LinearLayout safetyCard = card("隐私保护", "遇到验证码、支付、银行卡页面时，可以打开遮罩保护画面。");
+        LinearLayout safetyCard = card("安全选项", "敏感页面保护和家属画圈默认开启；远程点击必须由长辈明确授权。");
         safetyCard.addView(privacyButton);
-        safetyCard.addView(accessibilityButton);
         safetyCard.addView(overlayButton);
+        safetyCard.addView(controlButton);
+        safetyCard.addView(accessibilityButton);
         root.addView(safetyCard);
 
         root.addView(status);
@@ -264,10 +279,11 @@ public class MainActivity extends Activity {
         }
         familyPolling = true;
         elderAnnotationPolling = false;
+        familyControlAllowed = false;
         lastFrameReceivedAtMs = 0;
         lastFrameUpdatedAt = "";
         root = verticalRoot();
-        root.addView(hero("家属模式", "看屏幕，点一下给长辈画圈"));
+        root.addView(hero("家属模式", "看屏幕，点一下提示长辈"));
         root.addView(statusPill(bindingStatusText()));
         status = notice("正在等待长辈发起协助。看到屏幕后，点需要长辈点击的位置。");
         frameView = new ImageView(this);
@@ -292,23 +308,29 @@ public class MainActivity extends Activity {
                 float x = point[0];
                 float y = point[1];
                 sendAnnotation(x, y);
+                if (familyControlAllowed) {
+                    sendRemoteTap(x, y);
+                }
                 return true;
             }
             return true;
         });
 
+        Button controlRequestButton = secondaryButton("请求远程点击授权");
         Button refreshButton = primaryButton("立即刷新");
         Button backButton = secondaryButton("返回首页");
+        controlRequestButton.setOnClickListener(v -> requestRemoteControl());
         refreshButton.setOnClickListener(v -> pollFamilyOnce());
         backButton.setOnClickListener(v -> {
             familyPolling = false;
             showSetup();
         });
 
-        LinearLayout screenCard = card("长辈屏幕", "点截图上的位置发送“请点这里”的画圈提示。");
+        LinearLayout screenCard = card("长辈屏幕", "点截图位置会发送红圈提示；长辈授权后，也会自动帮长辈点击。");
         screenCard.addView(frameView);
         root.addView(screenCard);
         root.addView(status);
+        root.addView(controlRequestButton);
         root.addView(refreshButton);
         root.addView(backButton);
         setContentView(scroll(root));
@@ -358,6 +380,9 @@ public class MainActivity extends Activity {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 100);
         }
         if (!ensureOverlayReady()) {
+            return;
+        }
+        if (!ensureAccessibilityReady()) {
             return;
         }
         setStatus("正在发送协助请求...");
@@ -451,6 +476,7 @@ public class MainActivity extends Activity {
     }
 
     private void endHelpRequest() {
+        prefs.edit().putBoolean("remoteControlAllowed", false).apply();
         io.execute(() -> {
             try {
                 NetworkClient.postJson(baseUrl, "/api/end", new JSONObject()
@@ -466,7 +492,7 @@ public class MainActivity extends Activity {
             return;
         }
         pollFamilyOnce();
-        main.postDelayed(this::pollFamilyLoop, 500);
+        main.postDelayed(this::pollFamilyLoop, 300);
     }
 
     private void pollFamilyOnce() {
@@ -480,6 +506,7 @@ public class MainActivity extends Activity {
                 String token = encoded(authToken);
                 JSONObject help = NetworkClient.getJson(baseUrl, "/api/help?pairCode=" + encoded + "&authToken=" + token);
                 boolean active = help.optBoolean("active", false);
+                familyControlAllowed = help.optBoolean("controlAllowed", false);
                 if (!active) {
                     main.post(() -> setStatus("正在等待协助请求..."));
                     return;
@@ -488,7 +515,8 @@ public class MainActivity extends Activity {
                 String updatedAt = help.optString("updatedAt", "");
                 Bitmap bitmap = NetworkClient.getJpeg(baseUrl, "/api/frame?pairCode=" + encoded + "&authToken=" + token + "&t=" + System.currentTimeMillis());
                 main.post(() -> {
-                    setStatus(elderName + " 正在请求协助。最后更新：" + updatedAt);
+                    String controlText = familyControlAllowed ? "远程点击已授权。" : "未授权远程点击。";
+                    setStatus(elderName + " 正在请求协助。" + controlText + " 最后更新：" + updatedAt);
                     if (bitmap != null) {
                         lastFrameUpdatedAt = updatedAt;
                         lastFrameReceivedAtMs = System.currentTimeMillis();
@@ -523,6 +551,37 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void requestRemoteControl() {
+        setStatus("正在向长辈请求远程点击授权...");
+        io.execute(() -> {
+            try {
+                JSONObject payload = new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken);
+                NetworkClient.postJson(baseUrl, "/api/control/request", payload);
+                main.post(() -> setStatus("已请求长辈授权。长辈同意后，你点击截图就能直接帮忙点击。"));
+            } catch (Exception e) {
+                main.post(() -> setStatus("请求远程点击失败：" + e.getMessage()));
+            }
+        });
+    }
+
+    private void sendRemoteTap(float x, float y) {
+        io.execute(() -> {
+            try {
+                JSONObject payload = new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken)
+                        .put("x", x)
+                        .put("y", y);
+                NetworkClient.postJson(baseUrl, "/api/control/tap", payload);
+                main.post(() -> setStatus("已发送远程点击。"));
+            } catch (Exception e) {
+                main.post(() -> setStatus("远程点击失败：" + e.getMessage()));
+            }
+        });
+    }
+
     private float[] normalizedImagePoint(ImageView imageView, float touchX, float touchY) {
         Drawable drawable = imageView.getDrawable();
         if (drawable == null) {
@@ -550,7 +609,8 @@ public class MainActivity extends Activity {
             return;
         }
         pollElderAnnotationOnce();
-        main.postDelayed(this::pollElderAnnotationLoop, 750);
+        pollElderControlRequestOnce();
+        main.postDelayed(this::pollElderAnnotationLoop, 500);
     }
 
     private void pollElderAnnotationOnce() {
@@ -564,6 +624,22 @@ public class MainActivity extends Activity {
                 if (annotation != null) {
                     String label = annotation.optString("label", "请点这里");
                     main.post(() -> setStatus("家属提示：" + label + "。如果开启了画圈浮层，屏幕上会显示红圈。"));
+                }
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    private void pollElderControlRequestOnce() {
+        if (authToken.isEmpty()) {
+            return;
+        }
+        io.execute(() -> {
+            try {
+                JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
+                JSONObject family = result.optJSONObject("family");
+                if (family != null && family.optBoolean("controlRequested", false) && !prefs.getBoolean("remoteControlAllowed", false)) {
+                    main.post(() -> setStatus("家属请求远程点击。需要你点“允许家属远程点击”后，家属才能操作。"));
                 }
             } catch (Exception ignored) {
             }
@@ -593,6 +669,9 @@ public class MainActivity extends Activity {
     }
 
     private boolean ensureOverlayReady() {
+        if (!prefs.getBoolean("annotationAllowed", true)) {
+            return true;
+        }
         if (!ensureOverlayPermission()) {
             return false;
         }
@@ -607,10 +686,22 @@ public class MainActivity extends Activity {
                     Uri.parse("package:" + getPackageName())
             );
             startActivity(intent);
-            setStatus("请先允许“显示在其他应用上层”。打开后回来再点“找家人帮忙”。");
+            setStatus("首次准备：请允许“显示在其他应用上层”，回来后再点“开始协助”。");
             return false;
         }
         return true;
+    }
+
+    private boolean ensureAccessibilityReady() {
+        if (!prefs.getBoolean("sensitiveDetectionEnabled", true) && !prefs.getBoolean("remoteControlAllowed", false)) {
+            return true;
+        }
+        if (isAccessibilityServiceEnabled()) {
+            return true;
+        }
+        startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        setStatus("首次准备：请开启“亲情帮帮”辅助服务，回来后再点“开始协助”。");
+        return false;
     }
 
     private boolean ensureBound(String expectedRoleLabel) {
@@ -633,6 +724,50 @@ public class MainActivity extends Activity {
         return !authToken.isEmpty() && role.equals(memberRole);
     }
 
+    private void seedDefaultSafetyPrefs() {
+        SharedPreferences.Editor editor = prefs.edit();
+        if (!prefs.contains("sensitiveDetectionEnabled")) {
+            editor.putBoolean("sensitiveDetectionEnabled", true);
+        }
+        if (!prefs.contains("annotationAllowed")) {
+            editor.putBoolean("annotationAllowed", true);
+        }
+        if (!prefs.contains("remoteControlAllowed")) {
+            editor.putBoolean("remoteControlAllowed", false);
+        }
+        editor.apply();
+    }
+
+    private boolean isAccessibilityServiceEnabled() {
+        String enabled = Settings.Secure.getString(getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        if (enabled == null) {
+            return false;
+        }
+        String serviceName = getPackageName() + "/" + SensitiveAccessibilityService.class.getName();
+        return enabled.toLowerCase().contains(serviceName.toLowerCase());
+    }
+
+    private void allowRemoteControl(boolean allowed) {
+        if (allowed && !isAccessibilityServiceEnabled()) {
+            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            setStatus("请先开启“亲情帮帮”辅助服务，回来后再允许远程点击。");
+            return;
+        }
+        prefs.edit().putBoolean("remoteControlAllowed", allowed).apply();
+        setStatus(allowed ? "已允许家属远程点击。本次协助结束后会自动关闭。" : "已关闭家属远程点击。");
+        io.execute(() -> {
+            try {
+                JSONObject payload = new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken)
+                        .put("allowed", allowed);
+                NetworkClient.postJson(baseUrl, "/api/control/allow", payload);
+            } catch (Exception e) {
+                main.post(() -> setStatus("同步远程点击授权失败：" + e.getMessage()));
+            }
+        });
+    }
+
     private String migrateRelayUrl(String value) {
         String normalized = NetworkClient.normalizeBaseUrl(value);
         if (normalized.isEmpty()
@@ -647,11 +782,20 @@ public class MainActivity extends Activity {
     }
 
     private boolean isPrivacyMasked() {
-        return prefs.getBoolean("manualPrivacyMask", false) || prefs.getBoolean("autoPrivacyMask", false);
+        return prefs.getBoolean("manualPrivacyMask", false)
+                || (prefs.getBoolean("sensitiveDetectionEnabled", true) && prefs.getBoolean("autoPrivacyMask", false));
     }
 
-    private String privacyButtonText() {
-        return prefs.getBoolean("manualPrivacyMask", false) ? "关闭隐私遮罩" : "打开隐私遮罩";
+    private String sensitiveButtonText() {
+        return prefs.getBoolean("sensitiveDetectionEnabled", true) ? "敏感保护：已开启" : "敏感保护：已关闭";
+    }
+
+    private String annotationButtonText() {
+        return prefs.getBoolean("annotationAllowed", true) ? "画圈提示：已允许" : "画圈提示：已关闭";
+    }
+
+    private String remoteControlButtonText() {
+        return prefs.getBoolean("remoteControlAllowed", false) ? "远程点击：已允许" : "远程点击：需长辈授权";
     }
 
     private String bindingStatusText() {

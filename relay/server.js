@@ -38,6 +38,10 @@ function familyFor(pairCode) {
       frameUpdatedAt: "",
       masked: false,
       annotation: null,
+      controlRequested: false,
+      controlAllowed: false,
+      controlUpdatedAt: "",
+      controlAction: null,
     });
   }
   return families.get(pairCode);
@@ -59,6 +63,9 @@ function publicFamily(family) {
     updatedAt: family.updatedAt,
     frameUpdatedAt: family.frameUpdatedAt,
     masked: family.masked,
+    controlRequested: family.controlRequested,
+    controlAllowed: family.controlAllowed,
+    controlUpdatedAt: family.controlUpdatedAt,
     memberCount: family.members.size,
   };
 }
@@ -175,8 +182,72 @@ const server = http.createServer(async (req, res) => {
       if (!result) return;
       result.family.active = false;
       result.family.annotation = null;
+      result.family.controlAllowed = false;
+      result.family.controlRequested = false;
+      result.family.controlAction = null;
       result.family.updatedAt = new Date().toISOString();
       sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/control/request") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken, "family");
+      if (!result) return;
+      result.family.controlRequested = true;
+      result.family.controlUpdatedAt = new Date().toISOString();
+      sendJson(res, 200, { ok: true, family: publicFamily(result.family) });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/control/allow") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken, "elder");
+      if (!result) return;
+      result.family.controlAllowed = Boolean(payload.allowed);
+      result.family.controlRequested = false;
+      result.family.controlUpdatedAt = new Date().toISOString();
+      sendJson(res, 200, { ok: true, family: publicFamily(result.family) });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/control/tap") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken, "family");
+      if (!result) return;
+      if (!result.family.controlAllowed) {
+        sendJson(res, 403, { error: "control is not allowed" });
+        return;
+      }
+      result.family.controlAction = {
+        id: crypto.randomBytes(8).toString("hex"),
+        type: "tap",
+        x: Number(payload.x || 0),
+        y: Number(payload.y || 0),
+        updatedAt: new Date().toISOString(),
+        expiresAt: Date.now() + 3000,
+      };
+      sendJson(res, 200, { ok: true, action: result.family.controlAction });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/control/action") {
+      const pairCode = String(url.searchParams.get("pairCode") || "").trim();
+      const authToken = String(url.searchParams.get("authToken") || "").trim();
+      const result = requireMember(res, pairCode, authToken, "elder");
+      if (!result) return;
+      if (result.family.controlAction && Date.now() > Number(result.family.controlAction.expiresAt || 0)) {
+        result.family.controlAction = null;
+      }
+      const action = result.family.controlAction;
+      result.family.controlAction = null;
+      sendJson(res, 200, { action });
       return;
     }
 

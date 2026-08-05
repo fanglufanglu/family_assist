@@ -73,7 +73,7 @@ public class AnnotationOverlayService extends Service {
                 return;
             }
             pollOnce();
-            main.postDelayed(this, 350);
+            main.postDelayed(this, 200);
         }
     };
 
