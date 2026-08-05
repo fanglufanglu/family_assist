@@ -727,6 +727,10 @@ public class MainActivity extends Activity {
         familyRtcClient = new WebRtcClient(this, baseUrl, pairCode, authToken, new WebRtcClient.Listener() {
             @Override
             public void onState(String text) {
+                if (isAuthFailureText(text)) {
+                    clearBindingAndShowSetup("绑定已失效，请重新完成亲属绑定。");
+                    return;
+                }
                 setStatus(text);
             }
 
@@ -798,6 +802,10 @@ public class MainActivity extends Activity {
                     requestLatestFrame(encoded, token, frameUpdatedAt);
                 }
             } catch (Exception e) {
+                if (isAuthFailure(e)) {
+                    main.post(() -> clearBindingAndShowSetup("绑定已失效，请重新输入长辈给你的绑定码。"));
+                    return;
+                }
                 familyLastActive = false;
                 main.post(() -> setStatus("连接 relay 失败：" + e.getMessage()));
             } finally {
@@ -822,6 +830,10 @@ public class MainActivity extends Activity {
                     }
                 });
             } catch (Exception e) {
+                if (isAuthFailure(e)) {
+                    main.post(() -> clearBindingAndShowSetup("绑定已失效，请重新完成亲属绑定。"));
+                    return;
+                }
                 main.post(() -> setStatus("画面接收较慢，正在重试：" + e.getMessage()));
             } finally {
                 familyFrameInFlight = false;
@@ -850,6 +862,10 @@ public class MainActivity extends Activity {
                 NetworkClient.postJson(baseUrl, "/api/annotation", payload);
                 main.post(() -> setStatus("画圈提示已发送，几秒后会自动消失。"));
             } catch (Exception e) {
+                if (isAuthFailure(e)) {
+                    main.post(() -> clearBindingAndShowSetup("绑定已失效，请重新完成亲属绑定。"));
+                    return;
+                }
                 main.post(() -> setStatus("发送画圈失败：" + e.getMessage()));
             }
         });
@@ -870,6 +886,10 @@ public class MainActivity extends Activity {
                 NetworkClient.postJson(baseUrl, "/api/control/request", payload);
                 main.post(() -> setStatus("已请求长辈授权。长辈同意后，你点击截图就能直接帮忙点击。"));
             } catch (Exception e) {
+                if (isAuthFailure(e)) {
+                    main.post(() -> clearBindingAndShowSetup("绑定已失效，请重新完成亲属绑定。"));
+                    return;
+                }
                 main.post(() -> {
                     restoreButton(sourceButton);
                     setStatus("请求远程点击失败：" + e.getMessage());
@@ -892,6 +912,10 @@ public class MainActivity extends Activity {
                 NetworkClient.postJson(baseUrl, "/api/control/tap", payload);
                 main.post(() -> setStatus("已发送远程点击。"));
             } catch (Exception e) {
+                if (isAuthFailure(e)) {
+                    main.post(() -> clearBindingAndShowSetup("绑定已失效，请重新完成亲属绑定。"));
+                    return;
+                }
                 main.post(() -> setStatus("远程点击失败：" + e.getMessage()));
             }
         });
@@ -961,6 +985,10 @@ public class MainActivity extends Activity {
                 }
                 main.post(() -> setStatus("正在等待家属输入绑定码..."));
             } catch (Exception e) {
+                if (isAuthFailure(e)) {
+                    main.post(() -> clearBindingAndShowSetup("绑定已失效，请重新完成亲属绑定。"));
+                    return;
+                }
                 main.post(() -> setStatus("正在等待家属绑定。网络检查失败：" + e.getMessage()));
             }
         });
@@ -1004,11 +1032,43 @@ public class MainActivity extends Activity {
                         main.post(() -> handleRemoteControlRequest(updatedAt));
                     }
                 }
-            } catch (Exception ignored) {
+            } catch (Exception e) {
+                if (isAuthFailure(e)) {
+                    main.post(() -> clearBindingAndShowSetup("绑定已失效，请重新完成亲属绑定。"));
+                }
             } finally {
                 elderStatusInFlight = false;
             }
         });
+    }
+
+    private boolean isAuthFailure(Exception e) {
+        return isAuthFailureText(e == null ? "" : e.getMessage());
+    }
+
+    private boolean isAuthFailureText(String message) {
+        return message != null && (message.contains("HTTP 403") || message.contains("not bound"));
+    }
+
+    private void clearBindingAndShowSetup(String message) {
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        elderBindPolling = false;
+        stopFamilyWebRtc();
+        authToken = "";
+        memberRole = "";
+        prefs.edit()
+                .remove("authToken")
+                .remove("memberRole")
+                .remove("pendingInviteCode")
+                .remove("pendingControlRequestAt")
+                .remove("handledControlRequestAt")
+                .remove("notifiedControlRequestAt")
+                .putBoolean("familyBound", false)
+                .putBoolean("assistActive", false)
+                .apply();
+        showSetup();
+        setStatus(message);
     }
 
     private void handleAssistConnectionTimeout(JSONObject family) {
