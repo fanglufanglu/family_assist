@@ -84,16 +84,33 @@ public class SensitiveAccessibilityService extends AccessibilityService {
                 String token = URLEncoder.encode(authToken, StandardCharsets.UTF_8.name());
                 JSONObject result = NetworkClient.getJson(baseUrl, "/api/control/action?pairCode=" + pair + "&authToken=" + token);
                 JSONObject action = result.optJSONObject("action");
-                if (action != null && "tap".equals(action.optString("type"))) {
-                    float x = (float) action.optDouble("x", 0.5);
-                    float y = (float) action.optDouble("y", 0.5);
-                    main.post(() -> performTap(x, y));
+                if (action != null) {
+                    handleControlAction(action);
                 }
             } catch (Exception ignored) {
             } finally {
                 pollingControl = false;
             }
         });
+    }
+
+    private void handleControlAction(JSONObject action) {
+        String type = action.optString("type");
+        if ("tap".equals(type)) {
+            float x = (float) action.optDouble("x", 0.5);
+            float y = (float) action.optDouble("y", 0.5);
+            main.post(() -> performTap(x, y));
+        } else if ("swipe".equals(type)) {
+            float startX = (float) action.optDouble("startX", 0.5);
+            float startY = (float) action.optDouble("startY", 0.8);
+            float endX = (float) action.optDouble("endX", 0.5);
+            float endY = (float) action.optDouble("endY", 0.2);
+            long durationMs = Math.max(180, Math.min(800, action.optLong("durationMs", 350)));
+            main.post(() -> performSwipe(startX, startY, endX, endY, durationMs));
+        } else if ("global".equals(type)) {
+            String globalAction = action.optString("action");
+            main.post(() -> performGlobal(globalAction));
+        }
     }
 
     private void performTap(float normalizedX, float normalizedY) {
@@ -114,6 +131,51 @@ public class SensitiveAccessibilityService extends AccessibilityService {
                 .addStroke(new GestureDescription.StrokeDescription(path, 0, 80))
                 .build();
         dispatchGesture(gesture, null, null);
+    }
+
+    private void performSwipe(float normalizedStartX, float normalizedStartY, float normalizedEndX, float normalizedEndY, long durationMs) {
+        if (Build.VERSION.SDK_INT < 24) {
+            return;
+        }
+        DisplayMetrics metrics = displayMetrics();
+        if (metrics == null) {
+            return;
+        }
+        float startX = clamp(normalizedStartX * metrics.widthPixels, 1f, metrics.widthPixels - 1f);
+        float startY = clamp(normalizedStartY * metrics.heightPixels, 1f, metrics.heightPixels - 1f);
+        float endX = clamp(normalizedEndX * metrics.widthPixels, 1f, metrics.widthPixels - 1f);
+        float endY = clamp(normalizedEndY * metrics.heightPixels, 1f, metrics.heightPixels - 1f);
+        Path path = new Path();
+        path.moveTo(startX, startY);
+        path.lineTo(endX, endY);
+        GestureDescription gesture = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(path, 0, durationMs))
+                .build();
+        dispatchGesture(gesture, null, null);
+    }
+
+    private void performGlobal(String action) {
+        if ("home".equals(action)) {
+            performGlobalAction(GLOBAL_ACTION_HOME);
+        } else if ("back".equals(action)) {
+            performGlobalAction(GLOBAL_ACTION_BACK);
+        } else if ("recents".equals(action)) {
+            performGlobalAction(GLOBAL_ACTION_RECENTS);
+        }
+    }
+
+    private DisplayMetrics displayMetrics() {
+        WindowManager windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+        if (windowManager == null) {
+            return null;
+        }
+        DisplayMetrics metrics = new DisplayMetrics();
+        windowManager.getDefaultDisplay().getRealMetrics(metrics);
+        return metrics;
+    }
+
+    private float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private boolean isSensitivePackage(AccessibilityEvent event) {

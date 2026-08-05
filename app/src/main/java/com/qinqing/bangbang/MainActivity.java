@@ -95,6 +95,9 @@ public class MainActivity extends Activity {
     private boolean remoteRequestInProgress;
     private long lastAnnotationSentAtMs;
     private long lastFrameReceivedAtMs;
+    private float screenTouchStartX;
+    private float screenTouchStartY;
+    private long screenTouchStartAtMs;
     private String lastFrameUpdatedAt = "";
 
     private static final int COLOR_BG = 0xFFFFFBF7;
@@ -456,7 +459,7 @@ public class MainActivity extends Activity {
         boolean useWebRtc = isWebRtcEnabled();
         View screenView = useWebRtc ? buildRtcView() : buildFrameView();
 
-        Button controlRequestButton = secondaryButton("请求远程点击授权");
+        Button controlRequestButton = secondaryButton("请求远程操作授权");
         Button refreshButton = primaryButton("立即刷新");
         Button backButton = secondaryButton("返回首页");
         controlRequestButton.setOnClickListener(v -> requestRemoteControl(controlRequestButton));
@@ -473,11 +476,12 @@ public class MainActivity extends Activity {
             showSetup();
         });
 
-        LinearLayout screenCard = card(useWebRtc ? "长辈实时屏幕" : "长辈屏幕", "点画面位置会发送红圈提示；长辈授权后，也会自动帮长辈点击。");
+        LinearLayout screenCard = card(useWebRtc ? "长辈实时屏幕" : "长辈屏幕", "未授权时点画面会发红圈；授权后点按和滑动会直接操作长辈手机。");
         screenCard.addView(screenView);
         root.addView(screenCard);
         root.addView(status);
         root.addView(controlRequestButton);
+        root.addView(buildRemoteControlPanel());
         root.addView(refreshButton);
         root.addView(backButton);
         setContentView(scroll(root));
@@ -499,6 +503,13 @@ public class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT
         ));
         frameView.setOnTouchListener((view, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                view.getParent().requestDisallowInterceptTouchEvent(true);
+                screenTouchStartX = event.getX();
+                screenTouchStartY = event.getY();
+                screenTouchStartAtMs = System.currentTimeMillis();
+                return true;
+            }
             if (event.getAction() == MotionEvent.ACTION_UP && frameView.getDrawable() != null) {
                 long age = System.currentTimeMillis() - lastFrameReceivedAtMs;
                 if (lastFrameReceivedAtMs == 0 || age > FRESH_FRAME_MS) {
@@ -506,10 +517,11 @@ public class MainActivity extends Activity {
                     pollFamilyOnce();
                     return true;
                 }
-                float[] point = normalizedImagePoint(frameView, event.getX(), event.getY());
-                sendAnnotation(point[0], point[1]);
                 if (familyControlAllowed) {
-                    sendRemoteTap(point[0], point[1]);
+                    handleRemoteTouchOnImage(event.getX(), event.getY());
+                } else {
+                    float[] point = normalizedImagePoint(frameView, event.getX(), event.getY());
+                    sendAnnotation(point[0], point[1]);
                 }
                 return true;
             }
@@ -530,21 +542,61 @@ public class MainActivity extends Activity {
                 dp(460)
         ));
         rtcView.setOnTouchListener((view, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                view.getParent().requestDisallowInterceptTouchEvent(true);
+                screenTouchStartX = event.getX();
+                screenTouchStartY = event.getY();
+                screenTouchStartAtMs = System.currentTimeMillis();
+                return true;
+            }
             if (event.getAction() == MotionEvent.ACTION_UP) {
                 if (!rtcVideoReady) {
                     setStatus("实时画面正在连接，请等画面出现后再点。");
                     return true;
                 }
-                float[] point = normalizedViewPoint(rtcView, event.getX(), event.getY());
-                sendAnnotation(point[0], point[1]);
                 if (familyControlAllowed) {
-                    sendRemoteTap(point[0], point[1]);
+                    handleRemoteTouchOnView(rtcView, event.getX(), event.getY());
+                } else {
+                    float[] point = normalizedViewPoint(rtcView, event.getX(), event.getY());
+                    sendAnnotation(point[0], point[1]);
                 }
                 return true;
             }
             return true;
         });
         return rtcView;
+    }
+
+    private LinearLayout buildRemoteControlPanel() {
+        LinearLayout panel = card("远程操作", "长辈同意后可用：点画面是点击，拖动画面是滑动。下面按钮可用于返回、回主页和常用滑动。");
+
+        Button homeButton = secondaryButton("主页");
+        Button backButton = secondaryButton("返回");
+        Button swipeUpButton = secondaryButton("上滑");
+        Button swipeDownButton = secondaryButton("下滑");
+        Button swipeLeftButton = secondaryButton("左滑");
+        Button swipeRightButton = secondaryButton("右滑");
+
+        homeButton.setOnClickListener(v -> sendRemoteGlobal("home"));
+        backButton.setOnClickListener(v -> sendRemoteGlobal("back"));
+        swipeUpButton.setOnClickListener(v -> sendRemoteSwipe(0.5f, 0.82f, 0.5f, 0.22f, 420));
+        swipeDownButton.setOnClickListener(v -> sendRemoteSwipe(0.5f, 0.22f, 0.5f, 0.82f, 420));
+        swipeLeftButton.setOnClickListener(v -> sendRemoteSwipe(0.82f, 0.5f, 0.18f, 0.5f, 420));
+        swipeRightButton.setOnClickListener(v -> sendRemoteSwipe(0.18f, 0.5f, 0.82f, 0.5f, 420));
+
+        LinearLayout row1 = horizontalRow();
+        addControlButton(row1, homeButton);
+        addControlButton(row1, backButton);
+        LinearLayout row2 = horizontalRow();
+        addControlButton(row2, swipeUpButton);
+        addControlButton(row2, swipeDownButton);
+        LinearLayout row3 = horizontalRow();
+        addControlButton(row3, swipeLeftButton);
+        addControlButton(row3, swipeRightButton);
+        panel.addView(row1);
+        panel.addView(row2);
+        panel.addView(row3);
+        return panel;
     }
 
     private void showFamilyBind() {
@@ -919,6 +971,9 @@ public class MainActivity extends Activity {
     }
 
     private void sendRemoteTap(float x, float y) {
+        if (!ensureFamilyControlReady()) {
+            return;
+        }
         statusIo.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
@@ -929,13 +984,103 @@ public class MainActivity extends Activity {
                 NetworkClient.postJson(baseUrl, "/api/control/tap", payload);
                 main.post(() -> setStatus("已发送远程点击。"));
             } catch (Exception e) {
-                if (isAuthFailure(e)) {
-                    main.post(() -> clearBindingAndShowSetup("绑定已失效，请重新完成亲属绑定。"));
-                    return;
-                }
-                main.post(() -> setStatus("远程点击失败：" + e.getMessage()));
+                handleRemoteControlSendError(e);
             }
         });
+    }
+
+    private void sendRemoteSwipe(float startX, float startY, float endX, float endY, long durationMs) {
+        if (!ensureFamilyControlReady()) {
+            return;
+        }
+        statusIo.execute(() -> {
+            try {
+                JSONObject payload = new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken)
+                        .put("startX", startX)
+                        .put("startY", startY)
+                        .put("endX", endX)
+                        .put("endY", endY)
+                        .put("durationMs", durationMs);
+                NetworkClient.postJson(baseUrl, "/api/control/swipe", payload);
+                main.post(() -> setStatus("已发送远程滑动。"));
+            } catch (Exception e) {
+                handleRemoteControlSendError(e);
+            }
+        });
+    }
+
+    private void sendRemoteGlobal(String action) {
+        if (!ensureFamilyControlReady()) {
+            return;
+        }
+        statusIo.execute(() -> {
+            try {
+                JSONObject payload = new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken)
+                        .put("action", action);
+                NetworkClient.postJson(baseUrl, "/api/control/global", payload);
+                main.post(() -> setStatus("已发送远程系统操作。"));
+            } catch (Exception e) {
+                handleRemoteControlSendError(e);
+            }
+        });
+    }
+
+    private void handleRemoteControlSendError(Exception e) {
+        if (isAuthFailure(e)) {
+            main.post(() -> clearBindingAndShowSetup("绑定已失效，请重新完成亲属绑定。"));
+            return;
+        }
+        if (isControlNotAllowed(e)) {
+            familyControlAllowed = false;
+            main.post(() -> setStatus("长辈尚未授权远程操作，请先请求授权。"));
+            return;
+        }
+        main.post(() -> setStatus("远程操作失败：" + friendlyError(e)));
+    }
+
+    private boolean ensureFamilyControlReady() {
+        if (familyControlAllowed) {
+            return true;
+        }
+        setStatus("长辈同意后才能远程操作。你也可以先点画面给长辈画圈。");
+        pollFamilyOnce();
+        return false;
+    }
+
+    private boolean isControlNotAllowed(Exception e) {
+        String message = e.getMessage();
+        return message != null && message.contains("control is not allowed");
+    }
+
+    private void handleRemoteTouchOnImage(float endX, float endY) {
+        float distance = (float) Math.hypot(endX - screenTouchStartX, endY - screenTouchStartY);
+        float[] start = normalizedImagePoint(frameView, screenTouchStartX, screenTouchStartY);
+        float[] end = normalizedImagePoint(frameView, endX, endY);
+        if (distance > dp(42)) {
+            sendRemoteSwipe(start[0], start[1], end[0], end[1], gestureDuration());
+        } else {
+            sendRemoteTap(end[0], end[1]);
+        }
+    }
+
+    private void handleRemoteTouchOnView(View view, float endX, float endY) {
+        float distance = (float) Math.hypot(endX - screenTouchStartX, endY - screenTouchStartY);
+        float[] start = normalizedViewPoint(view, screenTouchStartX, screenTouchStartY);
+        float[] end = normalizedViewPoint(view, endX, endY);
+        if (distance > dp(42)) {
+            sendRemoteSwipe(start[0], start[1], end[0], end[1], gestureDuration());
+        } else {
+            sendRemoteTap(end[0], end[1]);
+        }
+    }
+
+    private long gestureDuration() {
+        long elapsed = System.currentTimeMillis() - screenTouchStartAtMs;
+        return Math.max(180, Math.min(700, elapsed));
     }
 
     private float[] normalizedImagePoint(ImageView imageView, float touchX, float touchY) {
@@ -1582,6 +1727,25 @@ public class MainActivity extends Activity {
         layout.setGravity(Gravity.CENTER_HORIZONTAL);
         layout.setBackgroundColor(COLOR_BG);
         return layout;
+    }
+
+    private LinearLayout horizontalRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER);
+        row.setLayoutParams(fullWidthParams());
+        return row;
+    }
+
+    private void addControlButton(LinearLayout row, Button button) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
+        params.setMargins(dp(4), dp(6), dp(4), dp(2));
+        button.setLayoutParams(params);
+        row.addView(button);
     }
 
     private ScrollView scroll(View child) {

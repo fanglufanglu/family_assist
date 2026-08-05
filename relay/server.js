@@ -293,6 +293,57 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/control/swipe") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken, "family");
+      if (!result) return;
+      if (!result.family.controlAllowed) {
+        sendJson(res, 403, { error: "control is not allowed" });
+        return;
+      }
+      result.family.controlAction = {
+        id: crypto.randomBytes(8).toString("hex"),
+        type: "swipe",
+        startX: Number(payload.startX || 0.5),
+        startY: Number(payload.startY || 0.5),
+        endX: Number(payload.endX || 0.5),
+        endY: Number(payload.endY || 0.5),
+        durationMs: Number(payload.durationMs || 350),
+        updatedAt: new Date().toISOString(),
+        expiresAt: Date.now() + 6000,
+      };
+      sendJson(res, 200, { ok: true, action: result.family.controlAction });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/control/global") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken, "family");
+      if (!result) return;
+      if (!result.family.controlAllowed) {
+        sendJson(res, 403, { error: "control is not allowed" });
+        return;
+      }
+      const action = String(payload.action || "").trim();
+      if (!["home", "back", "recents"].includes(action)) {
+        sendJson(res, 400, { error: "unsupported global action" });
+        return;
+      }
+      result.family.controlAction = {
+        id: crypto.randomBytes(8).toString("hex"),
+        type: "global",
+        action,
+        updatedAt: new Date().toISOString(),
+        expiresAt: Date.now() + 6000,
+      };
+      sendJson(res, 200, { ok: true, action: result.family.controlAction });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/control/action") {
       const pairCode = String(url.searchParams.get("pairCode") || "").trim();
       const authToken = String(url.searchParams.get("authToken") || "").trim();
