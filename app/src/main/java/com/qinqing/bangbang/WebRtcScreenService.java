@@ -126,14 +126,7 @@ public class WebRtcScreenService extends Service {
                 JSONObject family = result.optJSONObject("family");
                 AssistNotifier.handleControlRequest(this, family);
                 if (family != null && !family.optBoolean("active", false)) {
-                    SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-                    prefs.edit()
-                            .putString("pendingAssistMessage", "家人已结束本次协助。需要帮助时，可以再次发起求助。")
-                            .putBoolean("pendingAssistEndedEvent", true)
-                            .apply();
-                    if (!prefs.getBoolean("appForeground", false)) {
-                        AssistNotifier.showAssistEndedNotification(this);
-                    }
+                    AssistNotifier.handleAssistEnded(this, family);
                     stopSelf();
                 }
             } catch (Exception ignored) {

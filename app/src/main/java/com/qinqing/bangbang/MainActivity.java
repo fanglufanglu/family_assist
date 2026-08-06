@@ -223,7 +223,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         appInForeground = true;
-        prefs.edit().putBoolean("appForeground", true).apply();
+        prefs.edit().putBoolean("appForeground", true).commit();
         main.removeCallbacks(assistEndedUiLoop);
         maybeShowAssistEndedEvent();
         main.postDelayed(assistEndedUiLoop, 700);
@@ -258,14 +258,14 @@ public class MainActivity extends Activity {
     protected void onPause() {
         appInForeground = false;
         main.removeCallbacks(assistEndedUiLoop);
-        prefs.edit().putBoolean("appForeground", false).apply();
+        prefs.edit().putBoolean("appForeground", false).commit();
         super.onPause();
     }
 
     @Override
     protected void onStop() {
         appInForeground = false;
-        prefs.edit().putBoolean("appForeground", false).apply();
+        prefs.edit().putBoolean("appForeground", false).commit();
         super.onStop();
     }
 
@@ -334,6 +334,7 @@ public class MainActivity extends Activity {
 
         root.addView(hero("亲情帮帮", "长辈发起求助，家人远程看屏幕帮忙"));
         status = notice(bindingStatusText());
+        status.setVisibility(View.GONE);
 
         Button elderButton = primaryButton("我是长辈");
         elderButton.setTextSize(23);
@@ -405,7 +406,8 @@ public class MainActivity extends Activity {
         elderScreenVisible = false;
         root = verticalRoot();
         root.addView(pageHeader("连接设置", this::showProfile));
-        status = notice("连接服务已自动配置，通常无需修改。");
+        status = notice("");
+        status.setVisibility(View.GONE);
 
         EditText serverInput = input("服务地址", baseUrl);
         EditText nameInput = input("我的显示名称", displayName);
@@ -458,9 +460,8 @@ public class MainActivity extends Activity {
         if (!pendingAssistMessage.isEmpty()) {
             prefs.edit().remove("pendingAssistMessage").apply();
         }
-        status = notice(pendingAssistMessage.isEmpty()
-                ? bindingStatusText() + " 只有你主动求助后，家人才能看到屏幕。"
-                : pendingAssistMessage);
+        status = notice(pendingAssistMessage);
+        status.setVisibility(pendingAssistMessage.isEmpty() ? View.GONE : View.VISIBLE);
 
         if (!isBoundAs("elder")) {
             EditText nameInput = input("长辈名称，例如 妈妈", displayName);
@@ -558,7 +559,8 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         root = verticalRoot();
         root.addView(hero("绑定成功", "家人已经可以帮助你"));
-        status = notice("已绑定 " + Math.max(1, familyCount) + " 位家属。需要帮助时，由你主动发起求助。");
+        status = notice("");
+        status.setVisibility(View.GONE);
 
         LinearLayout successCard = card("亲属绑定已完成", "绑定只需要做一次。现在不会自动共享屏幕，也不会自动让家属操作手机。");
         Button prepareButton = primaryButton("知道了");
@@ -583,7 +585,8 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         root = verticalRoot();
         root.addView(pageHeader("安全设置", this::showElder));
-        status = notice("在这里管理敏感保护、画圈和远程操作权限。");
+        status = notice("");
+        status.setVisibility(View.GONE);
 
         Button privacyButton = secondaryButton(sensitiveButtonText());
         Button overlayButton = secondaryButton(annotationButtonText());
@@ -666,8 +669,9 @@ public class MainActivity extends Activity {
         lastFrameReceivedAtMs = 0;
         lastFrameUpdatedAt = "";
         root = verticalRoot();
-        root.addView(hero("家属协助", "查看长辈屏幕，提供提示与操作"));
+        root.addView(compactPageTitle("协助长辈"));
         status = stableNotice("连接正常");
+        status.setVisibility(View.GONE);
         familyControlStateView = stableNotice("");
         familyControlStateView.setVisibility(View.GONE);
         boolean useWebRtc = isWebRtcEnabled();
@@ -946,7 +950,14 @@ public class MainActivity extends Activity {
             return false;
         }
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        return manager == null || manager.areNotificationsEnabled();
+        if (manager == null || !manager.areNotificationsEnabled()) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            android.app.NotificationChannel urgent = manager.getNotificationChannel(AssistNotifier.CHANNEL_URGENT);
+            return urgent != null && urgent.getImportance() != NotificationManager.IMPORTANCE_NONE;
+        }
+        return true;
     }
 
     private void requestAssistNotificationPermission() {
@@ -2526,8 +2537,23 @@ public class MainActivity extends Activity {
     private void setStatus(String text) {
         if (status != null) {
             status.setText(text);
-            status.setVisibility(text == null || text.trim().isEmpty() ? View.GONE : View.VISIBLE);
+            boolean empty = text == null || text.trim().isEmpty();
+            boolean quietFamilyUpdate = "family".equals(currentPage) && !isImportantStatus(text);
+            status.setVisibility(empty || quietFamilyUpdate ? View.GONE : View.VISIBLE);
         }
+    }
+
+    private boolean isImportantStatus(String text) {
+        if (text == null) return false;
+        return text.contains("失败")
+                || text.contains("不可用")
+                || text.contains("已失效")
+                || text.contains("被占用")
+                || text.contains("请重新")
+                || text.contains("请检查")
+                || text.contains("未完成")
+                || text.contains("无法")
+                || text.contains("异常");
     }
 
     private void setButtonBusy(Button button, String busyText) {
@@ -2609,7 +2635,7 @@ public class MainActivity extends Activity {
         LinearLayout nav = horizontalRow();
         nav.setGravity(Gravity.CENTER);
         nav.setPadding(dp(4), dp(5), dp(4), dp(5));
-        nav.setBackground(rounded(0xFFFFFFFF, dp(8), COLOR_LINE));
+        nav.setBackground(rounded(0xFFFFFFFF, 0, COLOR_LINE));
         nav.setTag("bottomNav");
         LinearLayout.LayoutParams params = fullWidthParams();
         params.setMargins(0, dp(8), 0, 0);
@@ -2628,7 +2654,7 @@ public class MainActivity extends Activity {
         item.setClickable(true);
         item.setOnClickListener(listener);
         item.setPadding(0, dp(2), 0, dp(1));
-        item.setBackground(rounded(selected ? 0xFFEFF6FF : 0x00FFFFFF, dp(8), 0x00FFFFFF));
+        item.setBackgroundColor(0x00FFFFFF);
 
         ImageView iconView = new ImageView(this);
         iconView.setImageResource(iconRes);
@@ -2761,6 +2787,16 @@ public class MainActivity extends Activity {
         return layout;
     }
 
+    private TextView compactPageTitle(String heading) {
+        TextView title = sectionTitle(heading);
+        title.setTextSize(22);
+        title.setPadding(dp(2), dp(4), 0, dp(10));
+        LinearLayout.LayoutParams params = fullWidthParams();
+        params.setMargins(0, 0, 0, dp(2));
+        title.setLayoutParams(params);
+        return title;
+    }
+
     private LinearLayout card(String heading, String subheading) {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -2889,7 +2925,7 @@ public class MainActivity extends Activity {
         view.setHintTextColor(0xFF9AA4B2);
         view.setSingleLine(true);
         view.setPadding(dp(14), dp(10), dp(14), dp(10));
-        view.setBackground(rounded(0xFFF8FAFC, dp(12), COLOR_LINE));
+        view.setBackground(rounded(0xFFF8FAFC, dp(8), COLOR_LINE));
         view.setLayoutParams(fullWidthParams());
         return view;
     }
@@ -2901,7 +2937,7 @@ public class MainActivity extends Activity {
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setAllCaps(false);
         button.setTextColor(0xFFFFFFFF);
-        button.setBackground(rounded(COLOR_BLUE, dp(14), COLOR_BLUE));
+        button.setBackground(rounded(COLOR_BLUE, dp(8), COLOR_BLUE));
         button.setMinHeight(dp(54));
         button.setPadding(dp(12), dp(10), dp(12), dp(10));
         button.setLayoutParams(buttonParams());
@@ -2911,13 +2947,13 @@ public class MainActivity extends Activity {
     private Button secondaryButton(String text) {
         Button button = primaryButton(text);
         button.setTextColor(COLOR_BLUE_DARK);
-        button.setBackground(rounded(0xFFEFF6FF, dp(14), 0xFFBFDBFE));
+        button.setBackground(rounded(0xFFF4F7FB, dp(8), 0xFFCAD5E3));
         return button;
     }
 
     private Button dangerButton(String text) {
         Button button = primaryButton(text);
-        button.setBackground(rounded(COLOR_RED, dp(14), COLOR_RED));
+        button.setBackground(rounded(COLOR_RED, dp(8), COLOR_RED));
         return button;
     }
 

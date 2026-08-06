@@ -5,6 +5,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -60,7 +61,7 @@ final class AssistNotifier {
             return;
         }
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        if (prefs.getBoolean("appForeground", false)
+        if (isAppUiForeground(context)
                 && prefs.getBoolean("elderPageVisible", false)) {
             return;
         }
@@ -74,6 +75,10 @@ final class AssistNotifier {
                 .putString("notifiedControlRequestAt", updatedAt)
                 .commit();
         showControlRequestNotification(context);
+        showUrgentOverlay(context,
+                "家属请求远程操作",
+                "请打开亲情帮帮，确认是否允许本次操作。",
+                "control:" + updatedAt);
     }
 
     static void showControlRequestNotification(Context context) {
@@ -98,6 +103,9 @@ final class AssistNotifier {
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
                 .setCategory(Notification.CATEGORY_CALL)
+                .setColor(0xFF2563EB)
+                .setStyle(new Notification.BigTextStyle()
+                        .bigText("点这里回到亲情帮帮，确认是否允许本次远程操作。"))
                 .setPriority(Notification.PRIORITY_HIGH)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setDefaults(Notification.DEFAULT_ALL)
@@ -132,6 +140,9 @@ final class AssistNotifier {
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
                 .setCategory(Notification.CATEGORY_STATUS)
+                .setColor(0xFFDC2626)
+                .setStyle(new Notification.BigTextStyle()
+                        .bigText("屏幕共享和远程操作都已停止。需要帮助时，可以再次发起求助。"))
                 .setPriority(Notification.PRIORITY_HIGH)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setDefaults(Notification.DEFAULT_ALL)
@@ -142,6 +153,34 @@ final class AssistNotifier {
         if (manager != null) {
             manager.notify(NOTIFICATION_ASSIST_ENDED, notification);
         }
+    }
+
+    static synchronized void handleAssistEnded(Context context, JSONObject family) {
+        if (family == null || family.optBoolean("active", true)) {
+            return;
+        }
+        String updatedAt = family.optString("updatedAt", "");
+        if (updatedAt.isEmpty()) {
+            updatedAt = "ended";
+        }
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        prefs.edit()
+                .putString("pendingAssistMessage", "家人已结束本次协助。需要帮助时，可以再次发起求助。")
+                .putBoolean("pendingAssistEndedEvent", true)
+                .commit();
+        if (isAppUiForeground(context)) {
+            return;
+        }
+        String notifiedAt = prefs.getString("notifiedAssistEndedAt", "");
+        if (updatedAt.equals(notifiedAt)) {
+            return;
+        }
+        prefs.edit().putString("notifiedAssistEndedAt", updatedAt).commit();
+        showAssistEndedNotification(context);
+        showUrgentOverlay(context,
+                "本次协助已结束",
+                "家人已结束协助，屏幕共享和远程操作都已停止。",
+                "ended:" + updatedAt);
     }
 
     static void cancelAssistEndedNotification(Context context) {
@@ -155,6 +194,30 @@ final class AssistNotifier {
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
             manager.cancel(NOTIFICATION_CONTROL_REQUEST);
+        }
+    }
+
+    static boolean isAppUiForeground(Context context) {
+        ActivityManager.RunningAppProcessInfo info = new ActivityManager.RunningAppProcessInfo();
+        ActivityManager.getMyMemoryState(info);
+        boolean processVisible = info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+                || info.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        return processVisible && prefs.getBoolean("appForeground", false);
+    }
+
+    private static void showUrgentOverlay(Context context, String title, String message, String eventId) {
+        if (Build.VERSION.SDK_INT < 23 || !android.provider.Settings.canDrawOverlays(context)) {
+            return;
+        }
+        Intent intent = new Intent(context, AnnotationOverlayService.class)
+                .setAction(AnnotationOverlayService.ACTION_SHOW_URGENT)
+                .putExtra(AnnotationOverlayService.EXTRA_URGENT_TITLE, title)
+                .putExtra(AnnotationOverlayService.EXTRA_URGENT_MESSAGE, message)
+                .putExtra(AnnotationOverlayService.EXTRA_URGENT_EVENT_ID, eventId);
+        try {
+            context.startService(intent);
+        } catch (RuntimeException ignored) {
         }
     }
 }
