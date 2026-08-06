@@ -54,6 +54,8 @@ function familyFor(pairCode) {
       annotation: null,
       controlRequested: false,
       controlAllowed: false,
+      controlDecision: "idle",
+      controlReason: "",
       controlUpdatedAt: "",
       controlAction: null,
       activeHelperToken: "",
@@ -118,6 +120,8 @@ function publicFamily(family, member, authToken) {
     masked: family.masked,
     controlRequested: family.controlRequested,
     controlAllowed: family.controlAllowed,
+    controlDecision: family.controlDecision,
+    controlReason: family.controlReason,
     controlUpdatedAt: family.controlUpdatedAt,
     invitePending: Boolean(family.inviteCode) && Date.now() <= family.inviteExpiresAt,
     inviteExpiresAt: family.inviteExpiresAt,
@@ -218,6 +222,8 @@ const server = http.createServer(async (req, res) => {
       family.annotation = null;
       family.controlRequested = false;
       family.controlAllowed = false;
+      family.controlDecision = "idle";
+      family.controlReason = "";
       family.controlAction = null;
       family.activeHelperToken = "";
       family.activeHelperName = "";
@@ -356,6 +362,12 @@ const server = http.createServer(async (req, res) => {
       family.frameUpdatedAt = "";
       family.lastFamilySeenAtMs = 0;
       family.lastFamilySeenAt = "";
+      family.controlRequested = false;
+      family.controlAllowed = false;
+      family.controlDecision = "idle";
+      family.controlReason = "";
+      family.controlUpdatedAt = family.updatedAt;
+      family.controlAction = null;
       family.activeHelperToken = "";
       family.activeHelperName = "";
       family.webrtc = {
@@ -406,6 +418,8 @@ const server = http.createServer(async (req, res) => {
       result.family.frameUpdatedAt = "";
       result.family.controlAllowed = false;
       result.family.controlRequested = false;
+      result.family.controlDecision = "idle";
+      result.family.controlReason = "";
       result.family.controlAction = null;
       result.family.lastFamilySeenAtMs = 0;
       result.family.lastFamilySeenAt = "";
@@ -436,6 +450,8 @@ const server = http.createServer(async (req, res) => {
       result.family.frameUpdatedAt = "";
       result.family.controlAllowed = false;
       result.family.controlRequested = false;
+      result.family.controlDecision = "idle";
+      result.family.controlReason = "";
       result.family.controlAction = null;
       result.family.activeHelperToken = "";
       result.family.activeHelperName = "";
@@ -453,6 +469,9 @@ const server = http.createServer(async (req, res) => {
       if (!result) return;
       if (!requireActiveHelper(res, result, authToken)) return;
       result.family.controlRequested = true;
+      result.family.controlAllowed = false;
+      result.family.controlDecision = "pending";
+      result.family.controlReason = "";
       result.family.controlUpdatedAt = new Date().toISOString();
       audit(result.family, "control_requested", { by: result.member.name });
       sendJson(res, 200, { ok: true, family: publicFamily(result.family) });
@@ -467,8 +486,15 @@ const server = http.createServer(async (req, res) => {
       if (!result) return;
       result.family.controlAllowed = Boolean(payload.allowed);
       result.family.controlRequested = false;
+      result.family.controlReason = String(payload.reason || "");
+      result.family.controlDecision = result.family.controlAllowed
+        ? "allowed"
+        : (result.family.controlReason === "accessibility_not_enabled" ? "setup_required" : "denied");
       result.family.controlUpdatedAt = new Date().toISOString();
-      audit(result.family, result.family.controlAllowed ? "control_allowed" : "control_denied", { by: result.member.name });
+      audit(result.family, result.family.controlAllowed ? "control_allowed" : "control_denied", {
+        by: result.member.name,
+        reason: result.family.controlReason,
+      });
       sendJson(res, 200, { ok: true, family: publicFamily(result.family) });
       return;
     }

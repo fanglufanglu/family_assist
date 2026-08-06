@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ApplicationInfo;
 import android.graphics.Color;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
@@ -50,7 +51,6 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int REQUEST_CAPTURE = 2001;
     private static final int REQUEST_NOTIFICATIONS = 2002;
-    private static final int NOTIFICATION_CONTROL_REQUEST = 3001;
     private static final String PREFS = "family-assist";
     private static final String DEFAULT_RELAY_URL = "https://super-duper-funicular-44776x6g7hjvwj-8787.app.github.dev";
     private static final String DEFAULT_PAIR_CODE = "family001";
@@ -128,6 +128,7 @@ public class MainActivity extends Activity {
     private Button familyRemoteButton;
     private Button familyEndButton;
     private LinearLayout familyActionBar;
+    private TextView familyControlStateView;
     private TextView familyScreenLabelView;
     private FrameLayout familyScreenSurface;
     private LinearLayout familyWaitingView;
@@ -226,10 +227,22 @@ public class MainActivity extends Activity {
         main.removeCallbacks(assistEndedUiLoop);
         maybeShowAssistEndedEvent();
         main.postDelayed(assistEndedUiLoop, 700);
-        String pendingControl = prefs.getString("pendingControlRequestAt", "");
-        if (!pendingControl.isEmpty()) {
-            prefs.edit().remove("pendingControlRequestAt").apply();
-            main.postDelayed(() -> showRemoteControlPrompt(pendingControl), 250);
+        String setupControl = prefs.getString("controlSetupRequestAt", "");
+        if (!setupControl.isEmpty()) {
+            prefs.edit().remove("controlSetupRequestAt").commit();
+            if (isAccessibilityServiceEnabled()) {
+                main.postDelayed(() -> showRemoteControlPrompt(setupControl), 250);
+            } else {
+                markControlRequestHandled(setupControl);
+                allowRemoteControl(false, "accessibility_not_enabled");
+                main.postDelayed(this::showAccessibilitySetupIncomplete, 250);
+            }
+        } else {
+            String pendingControl = prefs.getString("pendingControlRequestAt", "");
+            if (!pendingControl.isEmpty()) {
+                prefs.edit().remove("pendingControlRequestAt").commit();
+                main.postDelayed(() -> showRemoteControlPrompt(pendingControl), 250);
+            }
         }
         if (refreshElderOnResume && elderScreenVisible) {
             refreshElderOnResume = false;
@@ -655,6 +668,8 @@ public class MainActivity extends Activity {
         root = verticalRoot();
         root.addView(hero("家属协助", "查看长辈屏幕，提供提示与操作"));
         status = stableNotice("连接正常");
+        familyControlStateView = stableNotice("");
+        familyControlStateView.setVisibility(View.GONE);
         boolean useWebRtc = isWebRtcEnabled();
         View screenView = buildFrameView();
 
@@ -676,6 +691,7 @@ public class MainActivity extends Activity {
         });
 
         root.addView(status);
+        root.addView(familyControlStateView);
         familyWaitingView = card("等待求助", "长辈发起求助后，屏幕会自动显示。");
         familyWaitingTitle = (TextView) familyWaitingView.getChildAt(0);
         familyWaitingCaption = (TextView) familyWaitingView.getChildAt(1);
@@ -1461,6 +1477,9 @@ public class MainActivity extends Activity {
                 familyLastActive = active;
                 familyControlAllowed = help.optBoolean("controlAllowed", false);
                 boolean controlRequested = help.optBoolean("controlRequested", false);
+                String controlDecision = help.optString("controlDecision", controlRequested ? "pending" : "idle");
+                String controlReason = help.optString("controlReason", "");
+                String controlUpdatedAt = help.optString("controlUpdatedAt", "");
                 if (!active) {
                     main.post(() -> {
                         familyLastSessionId = "";
@@ -1491,7 +1510,8 @@ public class MainActivity extends Activity {
                 String sessionId = help.optString("sessionId", "");
                 main.post(() -> {
                     setFamilySessionActive(true);
-                    updateFamilyControlButton(controlRequested, familyControlAllowed);
+                    updateFamilyControlState(controlRequested, familyControlAllowed,
+                            controlDecision, controlReason, controlUpdatedAt);
                     if (!sessionId.equals(familyLastSessionId)
                             || (isWebRtcEnabled() && familyRtcClient == null)) {
                         familyLastSessionId = sessionId;
@@ -1609,7 +1629,7 @@ public class MainActivity extends Activity {
                         .put("authToken", authToken);
                 NetworkClient.postJson(baseUrl, "/api/control/request", payload);
                 main.post(() -> {
-                    updateFamilyControlButton(true, false);
+                    updateFamilyControlState(true, false, "pending", "", "");
                     setStatus("已请求长辈授权。对方同意后，这里会自动显示“已授权”。");
                     pollFamilyOnce();
                 });
@@ -1629,6 +1649,11 @@ public class MainActivity extends Activity {
     }
 
     private void updateFamilyControlButton(boolean requested, boolean allowed) {
+        updateFamilyControlState(requested, allowed, requested ? "pending" : (allowed ? "allowed" : "idle"), "", "");
+    }
+
+    private void updateFamilyControlState(boolean requested, boolean allowed, String decision,
+                                          String reason, String updatedAt) {
         if (familyControlRequestButton == null) {
             return;
         }
@@ -1644,11 +1669,57 @@ public class MainActivity extends Activity {
             if (familyRemoteButton != null) familyRemoteButton.setVisibility(View.GONE);
         } else {
             familyControlRequestButton.setVisibility(View.VISIBLE);
-            familyControlRequestButton.setText("申请远程操作");
+            familyControlRequestButton.setText("denied".equals(decision) || "setup_required".equals(decision)
+                    ? "再次申请远程操作" : "申请远程操作");
             familyControlRequestButton.setEnabled(true);
             familyControlRequestButton.setAlpha(1f);
             if (familyRemoteButton != null) familyRemoteButton.setVisibility(View.GONE);
         }
+        updateFamilyControlNotice(decision, reason);
+        maybeShowFamilyControlResult(decision, updatedAt);
+    }
+
+    private void updateFamilyControlNotice(String decision, String reason) {
+        if (familyControlStateView == null) return;
+        int background;
+        String text;
+        if ("pending".equals(decision)) {
+            text = "远程操作：等待长辈确认";
+            background = 0xFFFFF7E6;
+        } else if ("allowed".equals(decision)) {
+            text = "远程操作：长辈已允许本次协助";
+            background = 0xFFECFDF5;
+        } else if ("setup_required".equals(decision) || "accessibility_not_enabled".equals(reason)) {
+            text = "远程操作未开启：长辈尚未完成辅助服务设置";
+            background = 0xFFFFF1F2;
+        } else if ("denied".equals(decision)) {
+            text = "远程操作：长辈本次未允许";
+            background = 0xFFFFF1F2;
+        } else {
+            familyControlStateView.setVisibility(View.GONE);
+            return;
+        }
+        familyControlStateView.setText(text);
+        familyControlStateView.setBackground(rounded(background, dp(8), COLOR_LINE));
+        familyControlStateView.setVisibility(View.VISIBLE);
+    }
+
+    private void maybeShowFamilyControlResult(String decision, String updatedAt) {
+        String seenAt = prefs.getString("familyControlResultSeenAt", "");
+        if (!("denied".equals(decision) || "setup_required".equals(decision))
+                || updatedAt.isEmpty() || updatedAt.equals(seenAt)
+                || !appInForeground || !"family".equals(currentPage) || isFinishing()) {
+            return;
+        }
+        prefs.edit().putString("familyControlResultSeenAt", updatedAt).apply();
+        boolean setupRequired = "setup_required".equals(decision);
+        new AlertDialog.Builder(this)
+                .setTitle(setupRequired ? "长辈尚未完成设置" : "长辈本次未允许")
+                .setMessage(setupRequired
+                        ? "长辈返回应用时没有开启辅助服务，本次远程操作申请已结束。你仍可继续画圈提示，稍后再申请。"
+                        : "本次不能直接操作长辈手机。你仍可继续查看屏幕并发送画圈提示。")
+                .setPositiveButton("知道了", null)
+                .show();
     }
 
     private void sendRemoteTap(float x, float y) {
@@ -1899,6 +1970,7 @@ public class MainActivity extends Activity {
                 .remove(PREF_ASSIST_SESSION_ID)
                 .remove("pendingInviteCode")
                 .remove("pendingControlRequestAt")
+                .remove("controlSetupRequestAt")
                 .remove("handledControlRequestAt")
                 .remove("notifiedControlRequestAt")
                 .putBoolean("familyBound", false)
@@ -1946,6 +2018,7 @@ public class MainActivity extends Activity {
                 .remove("assistStartedAtMs")
                 .remove(PREF_ASSIST_SESSION_ID)
                 .remove("pendingControlRequestAt")
+                .remove("controlSetupRequestAt")
                 .apply();
     }
 
@@ -1959,6 +2032,7 @@ public class MainActivity extends Activity {
                 .putBoolean("pendingAssistEndedEvent", false)
                 .remove("pendingAssistMessage")
                 .remove("pendingControlRequestAt")
+                .remove("controlSetupRequestAt")
                 .apply();
         AssistNotifier.cancelAssistEndedNotification(this);
         stopCaptureServices();
@@ -1976,10 +2050,7 @@ public class MainActivity extends Activity {
 
     private void handleRemoteControlRequest(String updatedAt) {
         if (!appInForeground) {
-            prefs.edit()
-                    .putString("pendingControlRequestAt", updatedAt)
-                    .apply();
-            showControlRequestNotification();
+            AssistNotifier.handleControlRequest(this, updatedAt);
             return;
         }
         showRemoteControlPrompt(updatedAt);
@@ -2003,7 +2074,12 @@ public class MainActivity extends Activity {
                         allowRemoteControl(true);
                         showElder();
                     } else {
-                        prefs.edit().putString("pendingControlRequestAt", updatedAt).apply();
+                        prefs.edit()
+                                .putString("controlSetupRequestAt", updatedAt)
+                                .putString("handledControlRequestAt", updatedAt)
+                                .remove("pendingControlRequestAt")
+                                .commit();
+                        AssistNotifier.cancelControlRequestNotification(this);
                         refreshElderOnResume = true;
                         elderScreenVisible = true;
                         openAccessibilityServiceSettings();
@@ -2023,14 +2099,21 @@ public class MainActivity extends Activity {
     }
 
     private void markControlRequestHandled(String updatedAt) {
-        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (manager != null) {
-            manager.cancel(NOTIFICATION_CONTROL_REQUEST);
-        }
+        AssistNotifier.cancelControlRequestNotification(this);
         prefs.edit()
                 .putString("handledControlRequestAt", updatedAt)
                 .remove("pendingControlRequestAt")
-                .apply();
+                .commit();
+    }
+
+    private void showAccessibilitySetupIncomplete() {
+        if (isFinishing()) return;
+        setStatus("未开启辅助服务，本次没有授权远程操作。家属仍可用画圈提示。" );
+        new AlertDialog.Builder(this)
+                .setTitle("本次未开启远程操作")
+                .setMessage("刚才没有开启“亲情帮帮”辅助服务，本次申请已结束，并已告知家属。需要时，家属可以重新申请。")
+                .setPositiveButton("知道了", null)
+                .show();
     }
 
     private void saveSetup(EditText serverInput, EditText nameInput) {
@@ -2199,6 +2282,10 @@ public class MainActivity extends Activity {
     }
 
     private void allowRemoteControl(boolean allowed) {
+        allowRemoteControl(allowed, allowed ? "" : "declined");
+    }
+
+    private void allowRemoteControl(boolean allowed, String reason) {
         if (allowed && !isAccessibilityServiceEnabled()) {
             showAccessibilityGuide();
             return;
@@ -2210,12 +2297,12 @@ public class MainActivity extends Activity {
                 JSONObject payload = new JSONObject()
                         .put("pairCode", pairCode)
                         .put("authToken", authToken)
-                        .put("allowed", allowed);
+                        .put("allowed", allowed)
+                        .put("reason", reason);
                 NetworkClient.postJson(baseUrl, "/api/control/allow", payload);
             } catch (Exception e) {
                 prefs.edit()
                         .putBoolean("remoteControlAllowed", false)
-                        .remove("handledControlRequestAt")
                         .apply();
                 main.post(() -> setStatus("授权同步失败，请保持网络畅通后让家属重新请求：" + friendlyError(e)));
             }
@@ -2296,6 +2383,10 @@ public class MainActivity extends Activity {
     private String sanitizeRelayUrl(String value) {
         String normalized = NetworkClient.normalizeBaseUrl(value);
         normalized = stripRelayPath(normalized);
+        boolean debuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        if (debuggable && (normalized.contains("127.0.0.1") || normalized.contains("10.0.2.2"))) {
+            return normalized;
+        }
         if (normalized.isEmpty()
                 || normalized.contains("192.168.")
                 || normalized.contains("10.0.2.2")
@@ -2485,10 +2576,6 @@ public class MainActivity extends Activity {
             return;
         }
         AssistNotifier.createControlChannel(this);
-    }
-
-    private void showControlRequestNotification() {
-        AssistNotifier.showControlRequestNotification(this);
     }
 
     private LinearLayout verticalRoot() {

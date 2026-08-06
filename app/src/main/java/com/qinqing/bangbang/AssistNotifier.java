@@ -52,7 +52,10 @@ final class AssistNotifier {
         if (family == null || !family.optBoolean("controlRequested", false)) {
             return;
         }
-        String updatedAt = family.optString("controlUpdatedAt", "");
+        handleControlRequest(context, family.optString("controlUpdatedAt", ""));
+    }
+
+    static synchronized void handleControlRequest(Context context, String updatedAt) {
         if (updatedAt.isEmpty()) {
             return;
         }
@@ -69,7 +72,7 @@ final class AssistNotifier {
         prefs.edit()
                 .putString("pendingControlRequestAt", updatedAt)
                 .putString("notifiedControlRequestAt", updatedAt)
-                .apply();
+                .commit();
         showControlRequestNotification(context);
     }
 
@@ -145,6 +148,13 @@ final class AssistNotifier {
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
             manager.cancel(NOTIFICATION_ASSIST_ENDED);
+        }
+    }
+
+    static void cancelControlRequestNotification(Context context) {
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.cancel(NOTIFICATION_CONTROL_REQUEST);
         }
     }
 }

@@ -75,9 +75,17 @@ async function run() {
   assert(wrongEnd.status === 409, "non-active relative must not end the session");
 
   const controlRequest = await post("/api/control/request", { pairCode, authToken: first.body.authToken });
-  assert(controlRequest.status === 200 && controlRequest.body.family.controlRequested, "control request should be visible to elder");
+  assert(controlRequest.status === 200 && controlRequest.body.family.controlRequested
+    && controlRequest.body.family.controlDecision === "pending", "control request should be visible to elder");
+  const setupRequired = await post("/api/control/allow", {
+    pairCode, authToken: elderToken, allowed: false, reason: "accessibility_not_enabled",
+  });
+  assert(setupRequired.status === 200 && setupRequired.body.family.controlDecision === "setup_required",
+    "unfinished accessibility setup should be visible to family");
+  await post("/api/control/request", { pairCode, authToken: first.body.authToken });
   const controlAllow = await post("/api/control/allow", { pairCode, authToken: elderToken, allowed: true });
-  assert(controlAllow.status === 200 && controlAllow.body.family.controlAllowed, "control approval should be visible to family");
+  assert(controlAllow.status === 200 && controlAllow.body.family.controlAllowed
+    && controlAllow.body.family.controlDecision === "allowed", "control approval should be visible to family");
   const approvedState = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
   assert(approvedState.body.controlAllowed && !approvedState.body.controlRequested, "approved control state should synchronize");
 
