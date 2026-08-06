@@ -128,7 +128,7 @@ public class WebRtcScreenService extends Service {
                 if (family != null && !family.optBoolean("active", false)) {
                     SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
                     prefs.edit()
-                            .putString("pendingAssistMessage", "家属已结束本次协助。需要时，你可以再次点“开始协助”。")
+                            .putString("pendingAssistMessage", "家人已结束本次协助。需要帮助时，可以再次发起求助。")
                             .putBoolean("pendingAssistEndedEvent", true)
                             .apply();
                     if (!prefs.getBoolean("appForeground", false)) {
@@ -172,7 +172,8 @@ public class WebRtcScreenService extends Service {
 
     private void uploadFallbackFrame(VideoFrame frame) {
         long now = System.currentTimeMillis();
-        if (rtcConnected || fallbackUploadInFlight || now - lastFallbackUploadMs < 1200) {
+        long intervalMs = rtcConnected ? 2500 : 1100;
+        if (fallbackUploadInFlight || now - lastFallbackUploadMs < intervalMs) {
             return;
         }
         lastFallbackUploadMs = now;

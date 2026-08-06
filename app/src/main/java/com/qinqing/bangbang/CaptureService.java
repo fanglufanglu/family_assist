@@ -199,7 +199,7 @@ public class CaptureService extends Service {
             if (family != null && !family.optBoolean("active", false)) {
                 SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
                 prefs.edit()
-                        .putString("pendingAssistMessage", "家属已结束本次协助。需要时，你可以再次点“开始协助”。")
+                        .putString("pendingAssistMessage", "家人已结束本次协助。需要帮助时，可以再次发起求助。")
                         .putBoolean("pendingAssistEndedEvent", true)
                         .apply();
                 if (!prefs.getBoolean("appForeground", false)) {
@@ -292,7 +292,7 @@ public class CaptureService extends Service {
                 ? new Notification.Builder(this, CHANNEL_ID)
                 : new Notification.Builder(this);
         return builder
-                .setContentTitle("亲情协助进行中")
+                .setContentTitle("正在向家人共享屏幕")
                 .setContentText("正在共享屏幕截图，可随时回到 APP 停止")
                 .setSmallIcon(android.R.drawable.ic_menu_camera)
                 .setOngoing(true)

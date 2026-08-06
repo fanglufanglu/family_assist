@@ -27,6 +27,7 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -38,10 +39,12 @@ import android.widget.TextView;
 import org.json.JSONObject;
 import org.webrtc.RendererCommon;
 import org.webrtc.SurfaceViewRenderer;
+import org.webrtc.VideoFrame;
 import org.webrtc.VideoTrack;
 
 import java.net.URL;
 import java.net.URLEncoder;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -60,11 +63,14 @@ public class MainActivity extends Activity {
     private static final long HELP_CONNECT_TIMEOUT_MS = 90_000;
     private static final long ACTION_BUTTON_RESET_MS = 1800;
     private static final long ANNOTATION_THROTTLE_MS = 850;
+    private static final long RTC_STALE_FRAME_MS = 3200;
+    private static final long RTC_FRAME_SAMPLE_MS = 850;
     private static final String PREF_ASSIST_SESSION_ID = "assistSessionId";
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService statusIo = Executors.newSingleThreadExecutor();
     private final ExecutorService mediaIo = Executors.newSingleThreadExecutor();
+    private final ExecutorService videoAnalysisIo = Executors.newSingleThreadExecutor();
     private final Runnable familyPollLoopRunnable = new Runnable() {
         @Override
         public void run() {
@@ -130,9 +136,10 @@ public class MainActivity extends Activity {
     private TextView familyWaitingTitle;
     private TextView familyWaitingCaption;
     private Button familyChangeBindingButton;
-    private boolean rtcVideoReady;
+    private volatile boolean rtcVideoReady;
     private boolean rtcTrackAttached;
     private boolean familyMediaReady;
+    private boolean rtcLiveDisplayed;
     private int rtcFrameWidth;
     private int rtcFrameHeight;
     private int rtcFrameRotation;
@@ -148,6 +155,10 @@ public class MainActivity extends Activity {
     private boolean familyEnding;
     private long lastAnnotationSentAtMs;
     private long lastFrameReceivedAtMs;
+    private volatile long lastRtcFrameAtMs;
+    private volatile long lastRtcSampleAtMs;
+    private volatile boolean rtcFrameAnalysisInFlight;
+    private volatile int rtcBlackSamples;
     private float screenTouchStartX;
     private float screenTouchStartY;
     private long screenTouchStartAtMs;
@@ -207,6 +218,7 @@ public class MainActivity extends Activity {
         stopFamilyWebRtc();
         statusIo.shutdownNow();
         mediaIo.shutdownNow();
+        videoAnalysisIo.shutdownNow();
         super.onDestroy();
     }
 
@@ -238,6 +250,13 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onStop() {
+        appInForeground = false;
+        prefs.edit().putBoolean("appForeground", false).apply();
+        super.onStop();
+    }
+
+    @Override
     public void onBackPressed() {
         if ("home".equals(currentPage)) {
             super.onBackPressed();
@@ -264,9 +283,7 @@ public class MainActivity extends Activity {
             publishHelpRequest(() -> {
                 startCaptureService(resultCode, captureData);
                 showElder();
-                setStatus(isWebRtcEnabled()
-                        ? "实时协助已开始，家属正在连接。需要结束时点“停止协助”。"
-                        : "协助已开始，家属正在连接。需要结束时点“停止协助”。");
+                setStatus("求助已发出，家人正在连接。需要结束时点“结束本次求助”。");
             });
         } else if (requestCode == REQUEST_CAPTURE) {
             prefs.edit().putBoolean("assistActive", false).apply();
@@ -285,7 +302,7 @@ public class MainActivity extends Activity {
         elderScreenVisible = false;
         root = verticalRoot();
 
-        root.addView(hero("亲情帮帮", "爸妈点一下，家人看屏幕帮忙"));
+        root.addView(hero("亲情帮帮", "长辈发起求助，家人远程看屏幕帮忙"));
         status = notice(bindingStatusText());
 
         Button elderButton = primaryButton("我是长辈");
@@ -295,11 +312,11 @@ public class MainActivity extends Activity {
         elderButton.setOnClickListener(v -> showElder());
         familyButton.setOnClickListener(v -> showFamily());
 
-        LinearLayout elderCard = card("长辈手机", "用于发起求助。需要帮忙时，只点一个大按钮。");
+        LinearLayout elderCard = card("长辈手机", "需要帮助时，向家人发起求助。");
         elderCard.addView(elderButton);
         root.addView(elderCard);
 
-        LinearLayout familyCard = card("家属手机", "用于接收求助、查看屏幕，并给长辈画圈提示。");
+        LinearLayout familyCard = card("家属手机", "接收求助，查看屏幕并提供提示。");
         familyCard.addView(familyButton);
         root.addView(familyCard);
 
@@ -316,8 +333,9 @@ public class MainActivity extends Activity {
         elderBindPolling = false;
         elderScreenVisible = false;
         root = verticalRoot();
-        root.addView(hero("我的", "连接、安全和隐私"));
-        status = notice("低频设置集中在这里。");
+        root.addView(hero("我的", "连接、安全与隐私"));
+        status = notice("");
+        status.setVisibility(View.GONE);
 
         Button connectionButton = secondaryButton("连接设置");
         Button safetyButton = secondaryButton("安全与权限设置");
@@ -360,18 +378,17 @@ public class MainActivity extends Activity {
         status = notice("连接服务已自动配置，通常无需修改。");
 
         EditText serverInput = input("服务地址", baseUrl);
-        EditText codeInput = input("家庭码", pairCode);
         EditText nameInput = input("我的显示名称", displayName);
         Button saveButton = primaryButton("保存设置");
-        Button testButton = secondaryButton("测试连接");
+        Button testButton = secondaryButton("检查连接");
         Button webRtcButton = secondaryButton(webRtcButtonText());
 
         saveButton.setOnClickListener(v -> {
-            saveSetup(serverInput, codeInput, nameInput);
+            saveSetup(serverInput, nameInput);
             setStatus("设置已保存。");
         });
         testButton.setOnClickListener(v -> {
-            saveSetup(serverInput, codeInput, nameInput);
+            saveSetup(serverInput, nameInput);
             testRelayConnection(testButton);
         });
         webRtcButton.setOnClickListener(v -> {
@@ -379,15 +396,13 @@ public class MainActivity extends Activity {
             prefs.edit().putBoolean("webRtcEnabled", next).apply();
             webRtcButton.setText(webRtcButtonText());
             setStatus(next
-                    ? "实时模式已开启。请在两台手机都开启后再测试；如发生异常，关闭后会回到稳定模式。"
-                    : "实时模式已关闭，当前使用稳定的截图协助模式。");
+                    ? "实时画面已开启。连接异常时会自动使用备用画面。"
+                    : "实时画面已关闭，当前使用备用画面。");
         });
 
         LinearLayout connectionCard = card("服务连接", "");
         connectionCard.addView(label("服务地址"));
         connectionCard.addView(serverInput);
-        connectionCard.addView(label("家庭码"));
-        connectionCard.addView(codeInput);
         connectionCard.addView(label("显示名称"));
         connectionCard.addView(nameInput);
         connectionCard.addView(saveButton);
@@ -408,13 +423,13 @@ public class MainActivity extends Activity {
         elderScreenVisible = true;
         boolean assisting = prefs.getBoolean("assistActive", false);
         root = verticalRoot();
-        root.addView(hero("长辈模式", assisting ? "屏幕正在共享给家属" : "需要帮助时，点“开始协助”"));
+        root.addView(hero("长辈求助", assisting ? "家人正在查看你的屏幕" : "需要帮助时，向家人发起求助"));
         String pendingAssistMessage = prefs.getString("pendingAssistMessage", "");
         if (!pendingAssistMessage.isEmpty()) {
             prefs.edit().remove("pendingAssistMessage").apply();
         }
         status = notice(pendingAssistMessage.isEmpty()
-                ? bindingStatusText() + " 只有你主动开始后，家属才能看到屏幕。"
+                ? bindingStatusText() + " 只有你主动求助后，家人才能看到屏幕。"
                 : pendingAssistMessage);
 
         if (!isBoundAs("elder")) {
@@ -448,17 +463,17 @@ public class MainActivity extends Activity {
         elderUiAssisting = assisting;
         Button helpButton = primaryButton(elderPrimaryButtonText());
         helpButton.setTextSize(24);
-        Button stopButton = dangerButton("停止协助");
+        Button stopButton = dangerButton("结束本次求助");
         Button safetyButton = secondaryButton("更多设置");
 
         helpButton.setOnClickListener(v -> {
             setButtonBusy(helpButton, needsOverlayPermission() ? "正在打开权限..." : "正在打开屏幕授权...");
             handleElderPrimaryAction();
         });
-        stopButton.setOnClickListener(v -> stopAssistance("已停止协助。"));
+        stopButton.setOnClickListener(v -> stopAssistance("本次求助已结束。"));
         safetyButton.setOnClickListener(v -> showSafetySettings());
 
-        LinearLayout stepsCard = card(assisting ? "协助进行中" : elderCurrentStepTitle(), elderAssistHintText());
+        LinearLayout stepsCard = card(assisting ? "家人正在帮你" : elderCurrentStepTitle(), elderAssistHintText());
         if (assisting) {
             root.addView(stepsCard);
             root.addView(stopButton);
@@ -513,10 +528,10 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         root = verticalRoot();
         root.addView(hero("绑定成功", "家人已经可以帮助你"));
-        status = notice("已绑定 " + Math.max(1, familyCount) + " 位家属。需要帮助时，再由你主动开始协助。");
+        status = notice("已绑定 " + Math.max(1, familyCount) + " 位家属。需要帮助时，由你主动发起求助。");
 
         LinearLayout successCard = card("亲属绑定已完成", "绑定只需要做一次。现在不会自动共享屏幕，也不会自动让家属操作手机。");
-        Button prepareButton = primaryButton("知道了，准备协助");
+        Button prepareButton = primaryButton("知道了");
         prepareButton.setOnClickListener(v -> showElder());
         successCard.addView(prepareButton);
         if (invitePending) {
@@ -544,7 +559,7 @@ public class MainActivity extends Activity {
         Button overlayButton = secondaryButton(annotationButtonText());
         Button controlButton = secondaryButton(remoteControlButtonText());
         Button accessibilityButton = secondaryButton(accessibilityButtonText());
-        Button backButton = primaryButton("返回长辈模式");
+        Button backButton = primaryButton("返回长辈页");
 
         privacyButton.setOnClickListener(v -> {
             boolean next = !prefs.getBoolean("sensitiveDetectionEnabled", true);
@@ -615,11 +630,15 @@ public class MainActivity extends Activity {
         rtcVideoReady = false;
         rtcTrackAttached = false;
         familyMediaReady = false;
+        rtcLiveDisplayed = false;
+        lastRtcFrameAtMs = 0;
+        lastRtcSampleAtMs = 0;
+        rtcBlackSamples = 0;
         lastFrameReceivedAtMs = 0;
         lastFrameUpdatedAt = "";
         root = verticalRoot();
-        root.addView(hero("家属模式", "查看屏幕并协助长辈"));
-        status = stableNotice("等待长辈开始协助");
+        root.addView(hero("家属协助", "查看长辈屏幕，提供提示与操作"));
+        status = stableNotice("连接正常");
         boolean useWebRtc = isWebRtcEnabled();
         View screenView = useWebRtc ? buildRtcView() : buildFrameView();
 
@@ -639,7 +658,7 @@ public class MainActivity extends Activity {
         });
 
         root.addView(status);
-        familyWaitingView = card("等待长辈开始", "长辈开始协助后，屏幕会自动显示。");
+        familyWaitingView = card("等待求助", "长辈发起求助后，屏幕会自动显示。");
         familyWaitingTitle = (TextView) familyWaitingView.getChildAt(0);
         familyWaitingCaption = (TextView) familyWaitingView.getChildAt(1);
         familyScreenLabelView = screenLabel(useWebRtc ? "长辈实时屏幕 · 点画面可提示" : "长辈屏幕 · 点画面可提示");
@@ -781,7 +800,11 @@ public class MainActivity extends Activity {
         root.addView(hero("绑定长辈", "输入长辈手机上显示的 6 位码"));
         status = notice("输入长辈手机上的绑定码，完成后即可接收求助。");
 
-        EditText nameInput = input("我的称呼，例如 女儿", displayName);
+        String familyName = displayName;
+        if (authToken.isEmpty() && (familyName.isEmpty() || "妈妈".equals(familyName))) {
+            familyName = "家人";
+        }
+        EditText nameInput = input("我的称呼，例如 女儿", familyName);
         EditText inviteInput = input("6 位绑定码", "");
         Button bindButton = primaryButton("绑定长辈");
 
@@ -894,7 +917,7 @@ public class MainActivity extends Activity {
                     markAssistanceStoppedLocal();
                     stopCaptureServices();
                     showElder();
-                    setStatus("发起协助失败：" + friendlyError(e) + "。请检查网络后重试。");
+                    setStatus("发起求助失败：" + friendlyError(e) + "。请检查网络后重试。");
                 });
             }
         });
@@ -1111,6 +1134,7 @@ public class MainActivity extends Activity {
                 if (rtcView != null) {
                     track.addSink(rtcView);
                 }
+                track.addSink(frame -> monitorRemoteRtcFrame(frame, rtcSessionId));
             }
 
             @Override
@@ -1126,7 +1150,7 @@ public class MainActivity extends Activity {
                             return;
                         }
                         rtcVideoReady = true;
-                        lastFrameReceivedAtMs = System.currentTimeMillis();
+                        lastRtcFrameAtMs = System.currentTimeMillis();
                         showFamilyMedia(rtcView, "实时画面已连接");
                     });
                 }
@@ -1155,9 +1179,78 @@ public class MainActivity extends Activity {
         }
         rtcVideoReady = false;
         rtcTrackAttached = false;
+        rtcLiveDisplayed = false;
+        lastRtcFrameAtMs = 0;
+        lastRtcSampleAtMs = 0;
+        rtcBlackSamples = 0;
+        rtcFrameAnalysisInFlight = false;
         rtcFrameWidth = 0;
         rtcFrameHeight = 0;
         rtcFrameRotation = 0;
+    }
+
+    private void monitorRemoteRtcFrame(VideoFrame frame, String expectedSessionId) {
+        long now = System.currentTimeMillis();
+        lastRtcFrameAtMs = now;
+        if (rtcFrameAnalysisInFlight || now - lastRtcSampleAtMs < RTC_FRAME_SAMPLE_MS) {
+            return;
+        }
+        lastRtcSampleAtMs = now;
+        rtcFrameAnalysisInFlight = true;
+        frame.retain();
+        videoAnalysisIo.execute(() -> {
+            VideoFrame.I420Buffer buffer = null;
+            try {
+                buffer = frame.getBuffer().toI420();
+                boolean black = isMostlyBlackFrame(buffer);
+                rtcBlackSamples = black ? rtcBlackSamples + 1 : 0;
+                main.post(() -> {
+                    if (!expectedSessionId.equals(familyLastSessionId) || !familyLastActive) {
+                        return;
+                    }
+                    if (rtcBlackSamples >= 2) {
+                        if (rtcVideoReady) {
+                            rtcVideoReady = false;
+                            setStatus("实时画面暂时不可用，已切换备用画面");
+                        }
+                        pollFamilyOnce();
+                    } else if (!black) {
+                        boolean recovered = !rtcVideoReady;
+                        rtcVideoReady = true;
+                        if (recovered || !rtcLiveDisplayed) {
+                            showFamilyMedia(rtcView, "实时画面已连接");
+                        }
+                    }
+                });
+            } catch (Exception ignored) {
+            } finally {
+                if (buffer != null) buffer.release();
+                frame.release();
+                rtcFrameAnalysisInFlight = false;
+            }
+        });
+    }
+
+    private boolean isMostlyBlackFrame(VideoFrame.I420Buffer buffer) {
+        ByteBuffer y = buffer.getDataY();
+        int width = buffer.getWidth();
+        int height = buffer.getHeight();
+        int stride = buffer.getStrideY();
+        int stepX = Math.max(1, width / 24);
+        int stepY = Math.max(1, height / 40);
+        long sum = 0;
+        int bright = 0;
+        int samples = 0;
+        for (int row = stepY / 2; row < height; row += stepY) {
+            for (int col = stepX / 2; col < width; col += stepX) {
+                int value = y.get(row * stride + col) & 0xFF;
+                sum += value;
+                if (value > 32) bright++;
+                samples++;
+            }
+        }
+        if (samples == 0) return false;
+        return sum / samples < 24 && bright * 100 < samples;
     }
 
     private void scheduleWebRtcFallback(String expectedSessionId) {
@@ -1225,13 +1318,13 @@ public class MainActivity extends Activity {
 
     private void setFamilySessionActive(boolean active) {
         if (active) {
-            updateFamilyWaiting("正在连接屏幕", "画面出现后即可开始协助。");
+            updateFamilyWaiting("正在连接屏幕", "画面出现后即可帮助长辈。");
             if (!familyMediaReady && familyScreenSurface != null) {
                 resizeFamilyScreenSurface(dp(2));
             }
         } else {
             familyMediaReady = false;
-            updateFamilyWaiting("等待长辈开始", "长辈开始协助后，屏幕会自动显示。");
+            updateFamilyWaiting("等待求助", "长辈发起求助后，屏幕会自动显示。");
             updateFamilyControlButton(false, false);
             resizeFamilyScreenSurface(dp(500));
         }
@@ -1252,6 +1345,7 @@ public class MainActivity extends Activity {
             return;
         }
         familyMediaReady = true;
+        rtcLiveDisplayed = mediaView == rtcView;
         familyScreenSurface.removeAllViews();
         resizeFamilyScreenSurface(dp(500));
         if (isWebRtcEnabled() && mediaView == frameView && rtcView != null) {
@@ -1300,6 +1394,11 @@ public class MainActivity extends Activity {
             return;
         }
         familyPollInFlight = true;
+        if (rtcVideoReady && lastRtcFrameAtMs > 0
+                && System.currentTimeMillis() - lastRtcFrameAtMs > RTC_STALE_FRAME_MS) {
+            rtcVideoReady = false;
+            rtcLiveDisplayed = false;
+        }
         statusIo.execute(() -> {
             try {
                 String encoded = encoded(pairCode);
@@ -1317,8 +1416,8 @@ public class MainActivity extends Activity {
                         clearFamilyScreen();
                         setFamilySessionActive(false);
                         setStatus(wasActive
-                                ? "本次协助已结束。可以等待长辈再次发起，或绑定其他长辈。"
-                                : "等待长辈开始协助");
+                                ? "本次协助已结束"
+                                : "连接正常");
                     });
                     return;
                 }
@@ -1735,7 +1834,7 @@ public class MainActivity extends Activity {
                 JSONObject annotation = result.optJSONObject("annotation");
                 if (annotation != null) {
                     String label = annotation.optString("label", "请点这里");
-                    main.post(() -> setStatus("家属提示：" + label + "。如果开启了画圈浮层，屏幕上会显示红圈。"));
+                    main.post(() -> setStatus("家人提示：" + label));
                 }
             } catch (Exception ignored) {
             }
@@ -1757,7 +1856,7 @@ public class MainActivity extends Activity {
                 boolean remoteActive = family.optBoolean("active", false);
                 if (elderUiAssisting && !remoteActive) {
                     prefs.edit()
-                            .putString("pendingAssistMessage", "家属已结束本次协助。需要帮助时可以再次发起。")
+                            .putString("pendingAssistMessage", "家人已结束本次协助。需要帮助时，可以再次发起求助。")
                             .putBoolean("pendingAssistEndedEvent", true)
                             .apply();
                     main.post(this::maybeShowAssistEndedEvent);
@@ -1824,7 +1923,7 @@ public class MainActivity extends Activity {
         boolean neverConnected = lastSeenAt < startedAt;
         boolean disconnectedTooLong = lastSeenAt > 0 && now - lastSeenAt > HELP_CONNECT_TIMEOUT_MS;
         if (neverConnected || disconnectedTooLong) {
-            main.post(() -> stopAssistance("家属长时间没有连接。本次协助已结束，需要时请重新点“开始协助”。"));
+            main.post(() -> stopAssistance("家人长时间没有连接，本次求助已结束。需要帮助时可以重新发起。"));
         }
     }
 
@@ -1871,7 +1970,7 @@ public class MainActivity extends Activity {
         }
         new AlertDialog.Builder(this)
                 .setTitle("本次协助已结束")
-                .setMessage("家属已结束本次协助。需要帮助时，你可以再次发起。")
+                .setMessage("家人已结束本次协助，屏幕共享已经停止。需要帮助时，可以再次发起求助。")
                 .setPositiveButton("知道了", (dialog, which) -> assistEndPromptShowing = false)
                 .setOnCancelListener(dialog -> assistEndPromptShowing = false)
                 .show();
@@ -1936,29 +2035,27 @@ public class MainActivity extends Activity {
                 .apply();
     }
 
-    private void saveSetup(EditText serverInput, EditText codeInput, EditText nameInput) {
+    private void saveSetup(EditText serverInput, EditText nameInput) {
         baseUrl = sanitizeRelayUrl(serverInput.getText().toString());
-        pairCode = codeInput.getText().toString().trim();
         displayName = nameInput.getText().toString().trim();
         if (displayName.isEmpty()) {
             displayName = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
         }
         prefs.edit()
                 .putString("baseUrl", baseUrl)
-                .putString("pairCode", pairCode)
                 .putString("displayName", displayName)
                 .apply();
     }
 
     private void testRelayConnection(Button sourceButton) {
-        setButtonBusy(sourceButton, "测试中...");
-        setStatus("正在测试连接...");
+        setButtonBusy(sourceButton, "检查中...");
+        setStatus("正在检查连接...");
         statusIo.execute(() -> {
             try {
                 NetworkClient.getJson(baseUrl, "/health");
                 main.post(() -> setStatus("连接服务正常"));
             } catch (Exception e) {
-                main.post(() -> setStatus("连接测试失败：" + friendlyError(e)));
+                main.post(() -> setStatus("连接检查失败：" + friendlyError(e)));
             } finally {
                 main.post(() -> restoreButton(sourceButton));
             }
@@ -2008,7 +2105,7 @@ public class MainActivity extends Activity {
             stopCaptureServices();
             endHelpRequest();
             markAssistanceStoppedLocal();
-            setStatus("正在重新发起协助...");
+            setStatus("正在重新发起求助...");
         }
         requestHelpAndCapture();
     }
@@ -2052,7 +2149,7 @@ public class MainActivity extends Activity {
             return true;
         }
         openAccessibilityServiceSettings();
-        setStatus("首次准备：请开启“亲情帮帮”辅助服务，回来后再点“开始协助”。");
+        setStatus("请开启“亲情帮帮”辅助服务，返回后再点“请家人帮忙”。");
         return false;
     }
 
@@ -2275,34 +2372,34 @@ public class MainActivity extends Activity {
     }
 
     private String webRtcButtonText() {
-        return isWebRtcEnabled() ? "实时模式(WebRTC)：已开启" : "实时模式(WebRTC)：关闭";
+        return isWebRtcEnabled() ? "实时画面：已开启" : "实时画面：已关闭";
     }
 
     private String elderPrimaryButtonText() {
         if (needsOverlayPermission()) {
             return "允许画圈提示";
         }
-        return "开始协助";
+        return "请家人帮忙";
     }
 
     private String elderCurrentStepTitle() {
         if (needsOverlayPermission()) {
             return "先完成一次权限设置";
         }
-        return "准备开始协助";
+        return "准备发起求助";
     }
 
     private String elderAssistHintText() {
         if (prefs.getBoolean("assistActive", false)) {
-            return "请切到需要帮助的应用。家属可以查看屏幕并给出提示；结束时回到这里点“停止协助”。";
+            return "请打开需要帮助的应用。家人可以查看屏幕并给出提示；结束时回到这里点“结束本次求助”。";
         }
         if (needsOverlayPermission()) {
             return "只需要设置一次。点蓝色按钮后，在系统页允许“显示在其他应用上层”，再按返回键回来。";
         }
         if (!isAccessibilityServiceEnabled()) {
-            return "点“开始协助”，再在系统弹窗中点“立即开始”。";
+            return "点“请家人帮忙”，再在系统弹窗中点“立即开始”。";
         }
-        return "点“开始协助”，确认屏幕共享后即可寻求帮助。";
+        return "点“请家人帮忙”，确认屏幕共享后，家人就能看到画面。";
     }
 
     private String bindingStatusText() {
@@ -2340,6 +2437,7 @@ public class MainActivity extends Activity {
     private void setStatus(String text) {
         if (status != null) {
             status.setText(text);
+            status.setVisibility(text == null || text.trim().isEmpty() ? View.GONE : View.VISIBLE);
         }
     }
 
@@ -2388,15 +2486,7 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT < 26) {
             return;
         }
-        NotificationChannel channel = new NotificationChannel(
-                CHANNEL_CONTROL,
-                "协助授权提醒",
-                NotificationManager.IMPORTANCE_HIGH
-        );
-        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (manager != null) {
-            manager.createNotificationChannel(channel);
-        }
+        AssistNotifier.createControlChannel(this);
     }
 
     private void showControlRequestNotification() {
@@ -2433,6 +2523,16 @@ public class MainActivity extends Activity {
         layout.setPadding(dp(14), dp(8), dp(14), dp(16));
         layout.setGravity(Gravity.CENTER_HORIZONTAL);
         layout.setBackgroundColor(COLOR_BG);
+        layout.setOnApplyWindowInsetsListener((view, insets) -> {
+            int topInset;
+            if (Build.VERSION.SDK_INT >= 30) {
+                topInset = insets.getInsets(WindowInsets.Type.statusBars()).top;
+            } else {
+                topInset = insets.getSystemWindowInsetTop();
+            }
+            view.setPadding(dp(14), dp(8) + topInset, dp(14), dp(16));
+            return insets;
+        });
         return layout;
     }
 
@@ -2573,39 +2673,30 @@ public class MainActivity extends Activity {
 
     private LinearLayout hero(String heading, String subheading) {
         LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.HORIZONTAL);
-        layout.setGravity(Gravity.CENTER_VERTICAL);
-        layout.setPadding(dp(14), dp(12), dp(14), dp(12));
-        layout.setBackground(gradientHero());
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setGravity(Gravity.START);
+        layout.setPadding(dp(2), dp(6), dp(2), dp(10));
+        layout.setBackgroundColor(COLOR_BG);
         LinearLayout.LayoutParams params = fullWidthParams();
-        params.setMargins(0, 0, 0, dp(10));
+        params.setMargins(0, 0, 0, dp(4));
         layout.setLayoutParams(params);
 
-        TextView logo = new TextView(this);
-        logo.setText("亲");
-        logo.setGravity(Gravity.CENTER);
-        logo.setTextSize(20);
-        logo.setTypeface(Typeface.DEFAULT_BOLD);
-        logo.setTextColor(COLOR_BLUE_DARK);
-        logo.setBackground(rounded(0xFFFFFFFF, dp(8), 0x00FFFFFF));
-        LinearLayout.LayoutParams logoParams = new LinearLayout.LayoutParams(dp(42), dp(42));
-        logoParams.setMargins(0, 0, dp(12), 0);
-        layout.addView(logo, logoParams);
-
-        LinearLayout copy = new LinearLayout(this);
-        copy.setOrientation(LinearLayout.VERTICAL);
-        copy.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = sectionTitle(heading);
-        title.setTextSize(22);
-        title.setTextColor(0xFFFFFFFF);
-        title.setPadding(0, 0, 0, dp(1));
-        copy.addView(title);
+        title.setTextSize(24);
+        title.setTextColor(COLOR_TEXT);
+        title.setPadding(0, 0, 0, dp(3));
+        layout.addView(title);
 
         TextView body = caption(subheading);
-        body.setTextColor(0xEFFFFFFF);
+        body.setTextColor(COLOR_MUTED);
         body.setPadding(0, 0, 0, 0);
-        copy.addView(body);
-        layout.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        layout.addView(body);
+
+        View accent = new View(this);
+        accent.setBackgroundColor(COLOR_BLUE);
+        LinearLayout.LayoutParams accentParams = new LinearLayout.LayoutParams(dp(36), dp(3));
+        accentParams.setMargins(0, dp(8), 0, 0);
+        layout.addView(accent, accentParams);
         return layout;
     }
 

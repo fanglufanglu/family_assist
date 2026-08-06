@@ -28,7 +28,7 @@ final class AssistNotifier {
         }
         NotificationChannel channel = new NotificationChannel(
                 CHANNEL_CONTROL,
-                "协助授权提醒",
+                "协助提醒",
                 NotificationManager.IMPORTANCE_HIGH
         );
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -83,6 +83,9 @@ final class AssistNotifier {
                 .setContentText("点这里回到亲情帮帮，确认是否允许本次协助。")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
+                .setCategory(Notification.CATEGORY_CALL)
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setAutoCancel(true)
                 .build();
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -108,10 +111,13 @@ final class AssistNotifier {
                 ? new Notification.Builder(context, CHANNEL_CONTROL)
                 : new Notification.Builder(context);
         Notification notification = builder
-                .setContentTitle("本次协助已结束")
-                .setContentText("家属已结束协助。需要帮助时可以再次发起。")
+                .setContentTitle("家人已结束本次协助")
+                .setContentText("屏幕共享已停止。需要帮助时，可以再次发起求助。")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
+                .setCategory(Notification.CATEGORY_STATUS)
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setAutoCancel(true)
                 .build();
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
