@@ -252,9 +252,18 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/bind") {
       const payload = JSON.parse((await readBody(req)).toString("utf8"));
-      const pairCode = String(payload.pairCode || "").trim();
+      let pairCode = String(payload.pairCode || "").trim();
       const inviteCode = String(payload.inviteCode || "").trim();
-      const family = pairCode ? familyFor(pairCode) : null;
+      let family = pairCode ? families.get(pairCode) : null;
+      if (!family || inviteCode !== family.inviteCode || Date.now() > family.inviteExpiresAt) {
+        for (const [candidatePairCode, candidate] of families.entries()) {
+          if (inviteCode && inviteCode === candidate.inviteCode && Date.now() <= candidate.inviteExpiresAt) {
+            pairCode = candidatePairCode;
+            family = candidate;
+            break;
+          }
+        }
+      }
       if (!family || !inviteCode || inviteCode !== family.inviteCode || Date.now() > family.inviteExpiresAt) {
         sendJson(res, 403, { error: "invalid or expired invite code" });
         return;
@@ -265,7 +274,7 @@ const server = http.createServer(async (req, res) => {
       }
       const existing = familyMembers(family).find(([, member]) => member.deviceId && member.deviceId === String(payload.deviceId || ""));
       if (existing) {
-        sendJson(res, 200, { ok: true, authToken: existing[0], alreadyBound: true, familyMemberCount: familyMembers(family).length });
+        sendJson(res, 200, { ok: true, pairCode, authToken: existing[0], alreadyBound: true, familyMemberCount: familyMembers(family).length });
         return;
       }
       if (familyMembers(family).length >= MAX_FAMILY_MEMBERS) {
@@ -281,7 +290,25 @@ const server = http.createServer(async (req, res) => {
       });
       family.updatedAt = new Date().toISOString();
       audit(family, "family_bound", { name: String(payload.familyName || "家属") });
-      sendJson(res, 200, { ok: true, authToken, familyMemberCount: familyMembers(family).length });
+      sendJson(res, 200, { ok: true, pairCode, authToken, familyMemberCount: familyMembers(family).length });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/unbind") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken, "family");
+      if (!result) return;
+      if (result.family.active) {
+        sendJson(res, 409, { error: "assist session is active" });
+        return;
+      }
+      const name = result.member.name || "家属";
+      result.family.members.delete(authToken);
+      result.family.updatedAt = new Date().toISOString();
+      audit(result.family, "family_unbound", { name });
+      sendJson(res, 200, { ok: true });
       return;
     }
 

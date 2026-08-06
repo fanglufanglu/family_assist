@@ -51,9 +51,10 @@ async function run() {
 
   const elderToken = invite.body.authToken;
   const inviteCode = invite.body.inviteCode;
-  const first = await post("/api/bind", { pairCode, inviteCode, familyName: "女儿", deviceId: "family-1" });
+  const first = await post("/api/bind", { pairCode: "old-local-code", inviteCode, familyName: "女儿", deviceId: "family-1" });
   const second = await post("/api/bind", { pairCode, inviteCode, familyName: "儿子", deviceId: "family-2" });
   assert(first.status === 200 && second.status === 200, "one invite should bind multiple relatives");
+  assert(first.body.pairCode === pairCode, "binding should return the elder-specific pair code");
   assert(second.body.familyMemberCount === 2, "bound relative count should be accurate");
   await post("/api/bind", { pairCode, inviteCode, familyName: "家属3", deviceId: "family-3" });
   await post("/api/bind", { pairCode, inviteCode, familyName: "家属4", deviceId: "family-4" });
@@ -104,6 +105,12 @@ async function run() {
   assert(staleEnd.body.stale, "an old session must not end a newer session");
   const stillActive = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
   assert(stillActive.body.active && stillActive.body.sessionId === nextHelp.body.sessionId, "new session should survive stale end requests");
+  const finalEnd = await post("/api/end", { pairCode, authToken: elderToken, sessionId: nextHelp.body.sessionId });
+  assert(finalEnd.status === 200 && !finalEnd.body.stale, "elder should end the current session");
+  const unbind = await post("/api/unbind", { pairCode, authToken: first.body.authToken });
+  assert(unbind.status === 200, "family should be able to unbind after assistance ends");
+  const elderAfterUnbind = await get(`/api/bind/status?pairCode=${pairCode}&authToken=${elderToken}`);
+  assert(elderAfterUnbind.body.family.familyMemberCount === 4, "unbind should update the relative count");
   console.log("Relay flow regression passed.");
 }
 

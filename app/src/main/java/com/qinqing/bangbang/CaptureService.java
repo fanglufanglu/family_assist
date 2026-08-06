@@ -203,9 +203,14 @@ public class CaptureService extends Service {
             JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + pair + "&authToken=" + token);
             JSONObject family = result.optJSONObject("family");
             if (family != null && !family.optBoolean("active", false)) {
-                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+                prefs.edit()
                         .putString("pendingAssistMessage", "家属已结束本次协助。需要时，你可以再次点“开始协助”。")
+                        .putBoolean("pendingAssistEndedEvent", true)
                         .apply();
+                if (!prefs.getBoolean("appForeground", false)) {
+                    AssistNotifier.showAssistEndedNotification(this);
+                }
                 stopSelf();
             }
         } catch (Exception ignored) {
