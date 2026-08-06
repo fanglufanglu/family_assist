@@ -75,6 +75,14 @@ Android Studio 会下载 Android Gradle Plugin 和 Gradle 依赖。连接 Androi
 
 ## 测试流程
 
+修改 relay 的绑定或会话逻辑后，先运行自动回归：
+
+```bash
+node relay/test-flow.js
+```
+
+该脚本会验证多家属绑定、单次协助占用、非协助者禁止结束，以及结束后再次发起协助。
+
 1. 电脑启动 relay 服务。
 2. 两台 Android 手机连接同一个 Wi-Fi。
 3. 两台手机安装并打开 APP。

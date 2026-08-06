@@ -4,6 +4,7 @@ const crypto = require("crypto");
 
 const port = Number(process.env.PORT || 8787);
 const families = new Map();
+const MAX_FAMILY_MEMBERS = 5;
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -55,6 +56,8 @@ function familyFor(pairCode) {
       controlAllowed: false,
       controlUpdatedAt: "",
       controlAction: null,
+      activeHelperToken: "",
+      activeHelperName: "",
       audit: [],
       crashes: [],
       webrtc: {
@@ -97,7 +100,12 @@ function iceConfig() {
   return servers;
 }
 
-function publicFamily(family) {
+function familyMembers(family) {
+  return [...family.members.entries()].filter(([, member]) => member.role === "family");
+}
+
+function publicFamily(family, member, authToken) {
+  const relatives = familyMembers(family);
   return {
     active: family.active,
     sessionId: family.sessionId,
@@ -114,6 +122,11 @@ function publicFamily(family) {
     invitePending: Boolean(family.inviteCode) && Date.now() <= family.inviteExpiresAt,
     inviteExpiresAt: family.inviteExpiresAt,
     memberCount: family.members.size,
+    familyMemberCount: relatives.length,
+    maxFamilyMembers: MAX_FAMILY_MEMBERS,
+    helperJoined: Boolean(family.activeHelperToken),
+    helperIsCurrent: Boolean(authToken) && family.activeHelperToken === authToken,
+    helperName: family.activeHelperName,
   };
 }
 
@@ -125,6 +138,14 @@ function requireMember(res, pairCode, authToken, role) {
     return null;
   }
   return { family, member };
+}
+
+function requireActiveHelper(res, result, authToken) {
+  if (!result.family.active || result.family.activeHelperToken !== authToken) {
+    sendJson(res, 409, { error: "another family member is assisting" });
+    return false;
+  }
+  return true;
 }
 
 function audit(family, type, detail) {
@@ -178,8 +199,15 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const family = familyFor(pairCode);
-      const elderToken = makeToken();
-      family.members.clear();
+      const requestedToken = String(payload.authToken || "").trim();
+      const existingElder = requestedToken ? family.members.get(requestedToken) : null;
+      const retainingFamily = existingElder && existingElder.role === "elder";
+      if (family.active) {
+        sendJson(res, 409, { error: "assist session is active" });
+        return;
+      }
+      const elderToken = retainingFamily ? requestedToken : makeToken();
+      if (!retainingFamily) family.members.clear();
       family.inviteCode = makeInviteCode();
       family.inviteExpiresAt = Date.now() + 10 * 60 * 1000;
       family.elderName = String(payload.elderName || "长辈");
@@ -191,6 +219,8 @@ const server = http.createServer(async (req, res) => {
       family.controlRequested = false;
       family.controlAllowed = false;
       family.controlAction = null;
+      family.activeHelperToken = "";
+      family.activeHelperName = "";
       family.audit = [];
       family.crashes = [];
       family.frame = null;
@@ -215,6 +245,7 @@ const server = http.createServer(async (req, res) => {
         inviteCode: family.inviteCode,
         inviteExpiresAt: family.inviteExpiresAt,
         authToken: elderToken,
+        familyMemberCount: familyMembers(family).length,
       });
       return;
     }
@@ -228,6 +259,19 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 403, { error: "invalid or expired invite code" });
         return;
       }
+      if (family.active) {
+        sendJson(res, 409, { error: "assist session is active" });
+        return;
+      }
+      const existing = familyMembers(family).find(([, member]) => member.deviceId && member.deviceId === String(payload.deviceId || ""));
+      if (existing) {
+        sendJson(res, 200, { ok: true, authToken: existing[0], alreadyBound: true, familyMemberCount: familyMembers(family).length });
+        return;
+      }
+      if (familyMembers(family).length >= MAX_FAMILY_MEMBERS) {
+        sendJson(res, 409, { error: "family member limit reached", maxFamilyMembers: MAX_FAMILY_MEMBERS });
+        return;
+      }
       const authToken = makeToken();
       family.members.set(authToken, {
         role: "family",
@@ -235,10 +279,23 @@ const server = http.createServer(async (req, res) => {
         deviceId: String(payload.deviceId || ""),
         createdAt: new Date().toISOString(),
       });
-      family.inviteCode = "";
-      family.inviteExpiresAt = 0;
       family.updatedAt = new Date().toISOString();
-      sendJson(res, 200, { ok: true, authToken });
+      audit(family, "family_bound", { name: String(payload.familyName || "家属") });
+      sendJson(res, 200, { ok: true, authToken, familyMemberCount: familyMembers(family).length });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/invite/cancel") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken, "elder");
+      if (!result) return;
+      result.family.inviteCode = "";
+      result.family.inviteExpiresAt = 0;
+      result.family.updatedAt = new Date().toISOString();
+      audit(result.family, "invite_cancelled", {});
+      sendJson(res, 200, { ok: true, family: publicFamily(result.family, result.member, authToken) });
       return;
     }
 
@@ -247,7 +304,7 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(url.searchParams.get("authToken") || "").trim();
       const result = requireMember(res, pairCode, authToken);
       if (!result) return;
-      sendJson(res, 200, { ok: true, member: result.member, family: publicFamily(result.family) });
+      sendJson(res, 200, { ok: true, member: result.member, family: publicFamily(result.family, result.member, authToken) });
       return;
     }
 
@@ -258,6 +315,10 @@ const server = http.createServer(async (req, res) => {
       const result = requireMember(res, pairCode, authToken, "elder");
       if (!result) return;
       const { family } = result;
+      if (familyMembers(family).length === 0) {
+        sendJson(res, 409, { error: "no family member is bound" });
+        return;
+      }
       family.sessionId = makeSessionId();
       family.active = true;
       family.elderName = String(payload.elderName || family.elderName || "长辈");
@@ -266,6 +327,8 @@ const server = http.createServer(async (req, res) => {
       family.updatedAt = new Date().toISOString();
       family.lastFamilySeenAtMs = 0;
       family.lastFamilySeenAt = "";
+      family.activeHelperToken = "";
+      family.activeHelperName = "";
       family.webrtc = {
         offer: null,
         answer: null,
@@ -274,7 +337,7 @@ const server = http.createServer(async (req, res) => {
         updatedAt: family.updatedAt,
       };
       audit(family, "help_started", { sessionId: family.sessionId, elderName: family.elderName });
-      sendJson(res, 200, { ok: true, sessionId: family.sessionId, family: publicFamily(family) });
+      sendJson(res, 200, { ok: true, sessionId: family.sessionId, family: publicFamily(family, result.member, authToken) });
       return;
     }
 
@@ -283,9 +346,16 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(url.searchParams.get("authToken") || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
-      result.family.lastFamilySeenAtMs = Date.now();
-      result.family.lastFamilySeenAt = new Date(result.family.lastFamilySeenAtMs).toISOString();
-      sendJson(res, 200, publicFamily(result.family));
+      if (result.family.active && !result.family.activeHelperToken) {
+        result.family.activeHelperToken = authToken;
+        result.family.activeHelperName = result.member.name || "家属";
+        audit(result.family, "family_joined", { name: result.family.activeHelperName, sessionId: result.family.sessionId });
+      }
+      if (result.family.activeHelperToken === authToken) {
+        result.family.lastFamilySeenAtMs = Date.now();
+        result.family.lastFamilySeenAt = new Date(result.family.lastFamilySeenAtMs).toISOString();
+      }
+      sendJson(res, 200, publicFamily(result.family, result.member, authToken));
       return;
     }
 
@@ -308,6 +378,8 @@ const server = http.createServer(async (req, res) => {
       result.family.controlAction = null;
       result.family.lastFamilySeenAtMs = 0;
       result.family.lastFamilySeenAt = "";
+      result.family.activeHelperToken = "";
+      result.family.activeHelperName = "";
       result.family.updatedAt = new Date().toISOString();
       audit(result.family, "help_ended", { sessionId });
       sendJson(res, 200, { ok: true });
@@ -320,6 +392,7 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(payload.authToken || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      if (!requireActiveHelper(res, result, authToken)) return;
       const sessionId = String(payload.sessionId || "").trim();
       if (sessionId && result.family.sessionId && sessionId !== result.family.sessionId) {
         sendJson(res, 200, { ok: true, stale: true });
@@ -331,9 +404,11 @@ const server = http.createServer(async (req, res) => {
       result.family.controlAllowed = false;
       result.family.controlRequested = false;
       result.family.controlAction = null;
+      result.family.activeHelperToken = "";
+      result.family.activeHelperName = "";
       result.family.updatedAt = new Date().toISOString();
       audit(result.family, "family_left", { sessionId, by: result.member.name });
-      sendJson(res, 200, { ok: true, family: publicFamily(result.family) });
+      sendJson(res, 200, { ok: true, family: publicFamily(result.family, result.member, authToken) });
       return;
     }
 
@@ -343,6 +418,7 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(payload.authToken || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      if (!requireActiveHelper(res, result, authToken)) return;
       result.family.controlRequested = true;
       result.family.controlUpdatedAt = new Date().toISOString();
       audit(result.family, "control_requested", { by: result.member.name });
@@ -370,6 +446,7 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(payload.authToken || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      if (!requireActiveHelper(res, result, authToken)) return;
       if (!result.family.controlAllowed) {
         sendJson(res, 403, { error: "control is not allowed" });
         return;
@@ -393,6 +470,7 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(payload.authToken || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      if (!requireActiveHelper(res, result, authToken)) return;
       if (!result.family.controlAllowed) {
         sendJson(res, 403, { error: "control is not allowed" });
         return;
@@ -424,6 +502,7 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(payload.authToken || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      if (!requireActiveHelper(res, result, authToken)) return;
       if (!result.family.controlAllowed) {
         sendJson(res, 403, { error: "control is not allowed" });
         return;
@@ -487,6 +566,7 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(url.searchParams.get("authToken") || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      if (!requireActiveHelper(res, result, authToken)) return;
       sendJson(res, 200, { offer: result.family.webrtc.offer });
       return;
     }
@@ -497,6 +577,7 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(payload.authToken || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      if (!requireActiveHelper(res, result, authToken)) return;
       if (String(payload.sessionId || "").trim() !== result.family.sessionId) {
         sendJson(res, 409, { error: "stale session" });
         return;
@@ -528,6 +609,7 @@ const server = http.createServer(async (req, res) => {
       const role = from === "elder" ? "elder" : "family";
       const result = requireMember(res, pairCode, authToken, role);
       if (!result) return;
+      if (role === "family" && !requireActiveHelper(res, result, authToken)) return;
       if (String(payload.sessionId || "").trim() !== result.family.sessionId) {
         sendJson(res, 409, { error: "stale session" });
         return;
@@ -555,6 +637,7 @@ const server = http.createServer(async (req, res) => {
       const since = Number(url.searchParams.get("since") || 0);
       const result = requireMember(res, pairCode, authToken, role === "elder" ? "elder" : "family");
       if (!result) return;
+      if (role !== "elder" && !requireActiveHelper(res, result, authToken)) return;
       const source = from === "elder" ? result.family.webrtc.elderIce : result.family.webrtc.familyIce;
       sendJson(res, 200, { candidates: source.slice(since), next: source.length });
       return;
@@ -587,6 +670,7 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(url.searchParams.get("authToken") || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      if (!requireActiveHelper(res, result, authToken)) return;
       const { family } = result;
       if (!family.frame) {
         res.writeHead(204, { "Access-Control-Allow-Origin": "*" });
@@ -609,6 +693,7 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(payload.authToken || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      if (!requireActiveHelper(res, result, authToken)) return;
       result.family.annotation = {
         type: "circle",
         x: Number(payload.x || 0),

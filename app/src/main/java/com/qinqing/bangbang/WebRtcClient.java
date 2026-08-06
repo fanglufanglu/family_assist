@@ -1,7 +1,9 @@
 package com.qinqing.bangbang;
 
+import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.media.projection.MediaProjection;
 import android.os.Handler;
 import android.os.Looper;
@@ -131,7 +133,8 @@ final class WebRtcClient {
                         .createInitializationOptions()
         );
         PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
-        options.disableNetworkMonitor = true;
+        options.disableNetworkMonitor = context.checkSelfPermission(Manifest.permission.ACCESS_NETWORK_STATE)
+                != PackageManager.PERMISSION_GRANTED;
         DefaultVideoEncoderFactory encoderFactory = new DefaultVideoEncoderFactory(eglBase.getEglBaseContext(), false, false);
         DefaultVideoDecoderFactory decoderFactory = new DefaultVideoDecoderFactory(eglBase.getEglBaseContext());
         factory = PeerConnectionFactory.builder()
