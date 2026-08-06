@@ -205,11 +205,11 @@ public class MainActivity extends Activity {
         elderButton.setTextSize(23);
         Button familyButton = secondaryButton("我是家属");
         familyButton.setTextSize(22);
-        Button settingsButton = secondaryButton("连接设置");
+        Button settingsButton = secondaryButton("我的设置");
 
         elderButton.setOnClickListener(v -> showElder());
         familyButton.setOnClickListener(v -> showFamily());
-        settingsButton.setOnClickListener(v -> showAdvancedSettings());
+        settingsButton.setOnClickListener(v -> showProfile());
 
         LinearLayout elderCard = card("长辈手机", "用于发起求助。需要帮忙时，只点一个大按钮。");
         elderCard.addView(elderButton);
@@ -224,6 +224,46 @@ public class MainActivity extends Activity {
         root.addView(safetyCard);
         root.addView(status);
         root.addView(bottomNav("home"));
+        setContentView(scroll(root));
+    }
+
+    private void showProfile() {
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        elderBindPolling = false;
+        elderScreenVisible = false;
+        root = verticalRoot();
+        root.addView(hero("我的", "连接、安全和隐私"));
+        root.addView(statusPill(bindingStatusText()));
+        status = notice("这些设置平时不用管。测试环境需要改 Relay 时，再进入连接设置。");
+
+        Button connectionButton = secondaryButton("连接设置");
+        Button safetyButton = secondaryButton("安全与权限设置");
+        Button privacyButton = secondaryButton("隐私政策");
+        Button homeButton = primaryButton("返回首页");
+
+        connectionButton.setOnClickListener(v -> showAdvancedSettings());
+        safetyButton.setOnClickListener(v -> {
+            if (isBoundAs("elder")) {
+                showSafetySettings();
+            } else {
+                setStatus("安全与权限主要用于长辈手机。请在长辈手机上打开。");
+            }
+        });
+        privacyButton.setOnClickListener(v -> showPrivacyPolicy());
+        homeButton.setOnClickListener(v -> showSetup());
+
+        LinearLayout settingsCard = card("设置", "把低频操作收在这里，避免打扰长辈发起协助。");
+        settingsCard.addView(connectionButton);
+        settingsCard.addView(safetyButton);
+        settingsCard.addView(privacyButton);
+        root.addView(settingsCard);
+
+        LinearLayout aboutCard = card("当前状态", bindingStatusText() + "\n实时模式：" + (isWebRtcEnabled() ? "已开启" : "已关闭") + "\nRelay：" + baseUrl);
+        root.addView(aboutCard);
+        root.addView(status);
+        root.addView(homeButton);
+        root.addView(bottomNav("profile"));
         setContentView(scroll(root));
     }
 
@@ -275,7 +315,7 @@ public class MainActivity extends Activity {
         root.addView(connectionCard);
         root.addView(status);
         root.addView(backButton);
-        root.addView(bottomNav("settings"));
+        root.addView(bottomNav("profile"));
         setContentView(scroll(root));
     }
 
@@ -440,7 +480,7 @@ public class MainActivity extends Activity {
         root.addView(safetyCard);
         root.addView(status);
         root.addView(backButton);
-        root.addView(bottomNav("settings"));
+        root.addView(bottomNav("profile"));
         setContentView(scroll(root));
     }
 
@@ -461,7 +501,7 @@ public class MainActivity extends Activity {
         Button backButton = primaryButton("返回首页");
         backButton.setOnClickListener(v -> showSetup());
         root.addView(backButton);
-        root.addView(bottomNav("privacy"));
+        root.addView(bottomNav("profile"));
         setContentView(scroll(root));
     }
 
@@ -1895,26 +1935,58 @@ public class MainActivity extends Activity {
 
     private LinearLayout bottomNav(String current) {
         LinearLayout nav = horizontalRow();
-        nav.setPadding(0, dp(8), 0, dp(8));
-        nav.setBackground(rounded(0xFFFFFFFF, dp(18), COLOR_LINE));
+        nav.setGravity(Gravity.CENTER);
+        nav.setPadding(dp(6), dp(8), dp(6), dp(8));
+        nav.setBackground(rounded(0xFFFFFFFF, dp(22), COLOR_LINE));
+        nav.setTag("bottomNav");
         LinearLayout.LayoutParams params = fullWidthParams();
-        params.setMargins(0, dp(8), 0, dp(10));
+        params.setMargins(0, dp(14), 0, dp(2));
         nav.setLayoutParams(params);
-        addNavButton(nav, "首页", "home".equals(current), v -> showSetup());
-        addNavButton(nav, "长辈", "elder".equals(current), v -> showElder());
-        addNavButton(nav, "家属", "family".equals(current), v -> showFamily());
-        addNavButton(nav, "隐私", "privacy".equals(current), v -> showPrivacyPolicy());
+        addNavItem(nav, "⌂", "首页", "home".equals(current), v -> showSetup());
+        addNavItem(nav, "亲", "长辈", "elder".equals(current), v -> showElder());
+        addNavItem(nav, "帮", "家属", "family".equals(current), v -> showFamily());
+        addNavItem(nav, "我", "我的", "profile".equals(current), v -> showProfile());
         return nav;
     }
 
-    private void addNavButton(LinearLayout row, String text, boolean selected, View.OnClickListener listener) {
-        Button button = selected ? primaryButton(text) : secondaryButton(text);
-        button.setTextSize(14);
-        button.setMinHeight(dp(44));
-        button.setOnClickListener(listener);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        params.setMargins(dp(4), 0, dp(4), 0);
-        row.addView(button, params);
+    private void addNavItem(LinearLayout row, String icon, String text, boolean selected, View.OnClickListener listener) {
+        LinearLayout item = new LinearLayout(this);
+        item.setOrientation(LinearLayout.VERTICAL);
+        item.setGravity(Gravity.CENTER);
+        item.setClickable(true);
+        item.setOnClickListener(listener);
+        item.setPadding(0, dp(2), 0, dp(1));
+        item.setBackground(rounded(selected ? 0xFFEFF6FF : 0x00FFFFFF, dp(16), 0x00FFFFFF));
+
+        TextView iconView = new TextView(this);
+        iconView.setText(icon);
+        iconView.setTextSize(selected ? 18 : 17);
+        iconView.setTypeface(Typeface.DEFAULT_BOLD);
+        iconView.setGravity(Gravity.CENTER);
+        iconView.setTextColor(selected ? COLOR_BLUE_DARK : COLOR_MUTED);
+        iconView.setIncludeFontPadding(false);
+
+        TextView labelView = new TextView(this);
+        labelView.setText(text);
+        labelView.setTextSize(12);
+        labelView.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        labelView.setGravity(Gravity.CENTER);
+        labelView.setTextColor(selected ? COLOR_BLUE_DARK : COLOR_MUTED);
+        labelView.setIncludeFontPadding(false);
+        labelView.setPadding(0, dp(3), 0, dp(3));
+
+        View indicator = new View(this);
+        indicator.setBackgroundColor(selected ? COLOR_BLUE_DARK : 0x00FFFFFF);
+        LinearLayout.LayoutParams indicatorParams = new LinearLayout.LayoutParams(dp(18), dp(3));
+        indicatorParams.setMargins(0, dp(1), 0, 0);
+
+        item.addView(iconView);
+        item.addView(labelView);
+        item.addView(indicator, indicatorParams);
+
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(62), 1f);
+        params.setMargins(dp(2), 0, dp(2), 0);
+        row.addView(item, params);
     }
 
     private void addControlButton(LinearLayout row, Button button) {
@@ -1928,11 +2000,41 @@ public class MainActivity extends Activity {
         row.addView(button);
     }
 
-    private ScrollView scroll(View child) {
+    private View scroll(View child) {
+        View nav = detachBottomNav(child);
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(COLOR_BG);
         scroll.addView(child);
-        return scroll;
+        if (nav == null) {
+            return scroll;
+        }
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundColor(COLOR_BG);
+        page.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
+        page.addView(nav);
+        return page;
+    }
+
+    private View detachBottomNav(View child) {
+        if (!(child instanceof LinearLayout)) {
+            return null;
+        }
+        LinearLayout layout = (LinearLayout) child;
+        int last = layout.getChildCount() - 1;
+        if (last < 0) {
+            return null;
+        }
+        View nav = layout.getChildAt(last);
+        if (!"bottomNav".equals(nav.getTag())) {
+            return null;
+        }
+        layout.removeViewAt(last);
+        return nav;
     }
 
     private LinearLayout hero(String heading, String subheading) {
