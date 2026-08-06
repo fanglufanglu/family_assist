@@ -20,6 +20,7 @@ public class WebRtcScreenService extends Service {
     static final String EXTRA_BASE_URL = "baseUrl";
     static final String EXTRA_PAIR_CODE = "pairCode";
     static final String EXTRA_AUTH_TOKEN = "authToken";
+    static final String EXTRA_SESSION_ID = "sessionId";
     static final String EXTRA_RESULT_DATA = "resultData";
 
     private static final String CHANNEL_ID = "webrtc_screen";
@@ -31,6 +32,7 @@ public class WebRtcScreenService extends Service {
     private String baseUrl;
     private String pairCode;
     private String authToken;
+    private String sessionId;
 
     @Override
     public void onCreate() {
@@ -50,12 +52,13 @@ public class WebRtcScreenService extends Service {
         baseUrl = intent.getStringExtra(EXTRA_BASE_URL);
         pairCode = intent.getStringExtra(EXTRA_PAIR_CODE);
         authToken = intent.getStringExtra(EXTRA_AUTH_TOKEN);
-        if (resultData == null || baseUrl == null || pairCode == null || authToken == null) {
+        sessionId = intent.getStringExtra(EXTRA_SESSION_ID);
+        if (resultData == null || baseUrl == null || pairCode == null || authToken == null || sessionId == null) {
             stopSelf();
             return START_NOT_STICKY;
         }
         if (client == null) {
-            client = new WebRtcClient(this, baseUrl, pairCode, authToken, new WebRtcClient.Listener() {
+            client = new WebRtcClient(this, baseUrl, pairCode, authToken, sessionId, new WebRtcClient.Listener() {
                 @Override
                 public void onState(String text) {
                     showForeground(text);
@@ -123,7 +126,8 @@ public class WebRtcScreenService extends Service {
             try {
                 NetworkClient.postJson(baseUrl, "/api/end", new JSONObject()
                         .put("pairCode", pairCode)
-                        .put("authToken", authToken));
+                        .put("authToken", authToken)
+                        .put("sessionId", sessionId));
             } catch (Exception ignored) {
             }
         }, "webrtc-end-relay").start();

@@ -37,6 +37,7 @@ public class CaptureService extends Service {
     static final String EXTRA_BASE_URL = "baseUrl";
     static final String EXTRA_PAIR_CODE = "pairCode";
     static final String EXTRA_AUTH_TOKEN = "authToken";
+    static final String EXTRA_SESSION_ID = "sessionId";
     static final String EXTRA_RESULT_CODE = "resultCode";
     static final String EXTRA_RESULT_DATA = "resultData";
 
@@ -51,6 +52,7 @@ public class CaptureService extends Service {
     private String baseUrl;
     private String pairCode;
     private String authToken;
+    private String sessionId;
     private long lastControlCheckMs;
     private boolean destroyed;
 
@@ -70,9 +72,10 @@ public class CaptureService extends Service {
         baseUrl = intent.getStringExtra(EXTRA_BASE_URL);
         pairCode = intent.getStringExtra(EXTRA_PAIR_CODE);
         authToken = intent.getStringExtra(EXTRA_AUTH_TOKEN);
+        sessionId = intent.getStringExtra(EXTRA_SESSION_ID);
         int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
         Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA);
-        if (resultData == null || baseUrl == null || pairCode == null || authToken == null) {
+        if (resultData == null || baseUrl == null || pairCode == null || authToken == null || sessionId == null) {
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -170,7 +173,8 @@ public class CaptureService extends Service {
             try {
                 NetworkClient.postJson(baseUrl, "/api/end", new JSONObject()
                         .put("pairCode", pairCode)
-                        .put("authToken", authToken));
+                        .put("authToken", authToken)
+                        .put("sessionId", sessionId));
             } catch (Exception ignored) {
             }
         }, "capture-end-relay").start();
@@ -223,6 +227,7 @@ public class CaptureService extends Service {
             String encodedAuthToken = URLEncoder.encode(authToken, StandardCharsets.UTF_8.name());
             String path = "/api/frame?pairCode=" + encodedPairCode
                     + "&authToken=" + encodedAuthToken
+                    + "&sessionId=" + URLEncoder.encode(sessionId, StandardCharsets.UTF_8.name())
                     + "&masked=" + (masked ? "1" : "0");
             NetworkClient.postJpeg(baseUrl, path, out.toByteArray());
         } catch (Exception ignored) {

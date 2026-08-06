@@ -37,6 +37,7 @@ function logRequest(req, res, startedAt) {
 function familyFor(pairCode) {
   if (!families.has(pairCode)) {
     families.set(pairCode, {
+      sessionId: "",
       inviteCode: "",
       inviteExpiresAt: 0,
       members: new Map(),
@@ -54,6 +55,7 @@ function familyFor(pairCode) {
       controlAllowed: false,
       controlUpdatedAt: "",
       controlAction: null,
+      audit: [],
       webrtc: {
         offer: null,
         answer: null,
@@ -74,9 +76,30 @@ function makeInviteCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
+function makeSessionId() {
+  return crypto.randomBytes(12).toString("hex");
+}
+
+function iceConfig() {
+  const urls = String(process.env.TURN_URLS || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const servers = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
+  if (urls.length > 0) {
+    servers.push({
+      urls,
+      username: String(process.env.TURN_USERNAME || ""),
+      credential: String(process.env.TURN_CREDENTIAL || ""),
+    });
+  }
+  return servers;
+}
+
 function publicFamily(family) {
   return {
     active: family.active,
+    sessionId: family.sessionId,
     elderName: family.elderName,
     deviceName: family.deviceName,
     updatedAt: family.updatedAt,
@@ -103,6 +126,18 @@ function requireMember(res, pairCode, authToken, role) {
   return { family, member };
 }
 
+function audit(family, type, detail) {
+  family.audit.push({
+    id: crypto.randomBytes(8).toString("hex"),
+    type,
+    detail: detail || {},
+    createdAt: new Date().toISOString(),
+  });
+  if (family.audit.length > 200) {
+    family.audit.splice(0, family.audit.length - 200);
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const startedAt = Date.now();
   res.on("finish", () => logRequest(req, res, startedAt));
@@ -111,6 +146,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
       sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/ice-config") {
+      sendJson(res, 200, { ok: true, iceServers: iceConfig() });
       return;
     }
 
@@ -129,11 +169,13 @@ const server = http.createServer(async (req, res) => {
       family.elderName = String(payload.elderName || "长辈");
       family.deviceName = String(payload.deviceName || "");
       family.updatedAt = new Date().toISOString();
+      family.sessionId = "";
       family.active = false;
       family.annotation = null;
       family.controlRequested = false;
       family.controlAllowed = false;
       family.controlAction = null;
+      family.audit = [];
       family.frame = null;
       family.frameUpdatedAt = "";
       family.lastFamilySeenAtMs = 0;
@@ -199,6 +241,7 @@ const server = http.createServer(async (req, res) => {
       const result = requireMember(res, pairCode, authToken, "elder");
       if (!result) return;
       const { family } = result;
+      family.sessionId = makeSessionId();
       family.active = true;
       family.elderName = String(payload.elderName || family.elderName || "长辈");
       family.deviceName = String(payload.deviceName || "");
@@ -213,7 +256,8 @@ const server = http.createServer(async (req, res) => {
         familyIce: [],
         updatedAt: family.updatedAt,
       };
-      sendJson(res, 200, { ok: true, family: publicFamily(family) });
+      audit(family, "help_started", { sessionId: family.sessionId, elderName: family.elderName });
+      sendJson(res, 200, { ok: true, sessionId: family.sessionId, family: publicFamily(family) });
       return;
     }
 
@@ -234,7 +278,13 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(payload.authToken || "").trim();
       const result = requireMember(res, pairCode, authToken, "elder");
       if (!result) return;
+      const sessionId = String(payload.sessionId || "").trim();
+      if (sessionId && result.family.sessionId && sessionId !== result.family.sessionId) {
+        sendJson(res, 200, { ok: true, stale: true });
+        return;
+      }
       result.family.active = false;
+      result.family.sessionId = "";
       result.family.annotation = null;
       result.family.controlAllowed = false;
       result.family.controlRequested = false;
@@ -242,6 +292,7 @@ const server = http.createServer(async (req, res) => {
       result.family.lastFamilySeenAtMs = 0;
       result.family.lastFamilySeenAt = "";
       result.family.updatedAt = new Date().toISOString();
+      audit(result.family, "help_ended", { sessionId });
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -254,6 +305,7 @@ const server = http.createServer(async (req, res) => {
       if (!result) return;
       result.family.controlRequested = true;
       result.family.controlUpdatedAt = new Date().toISOString();
+      audit(result.family, "control_requested", { by: result.member.name });
       sendJson(res, 200, { ok: true, family: publicFamily(result.family) });
       return;
     }
@@ -267,6 +319,7 @@ const server = http.createServer(async (req, res) => {
       result.family.controlAllowed = Boolean(payload.allowed);
       result.family.controlRequested = false;
       result.family.controlUpdatedAt = new Date().toISOString();
+      audit(result.family, result.family.controlAllowed ? "control_allowed" : "control_denied", { by: result.member.name });
       sendJson(res, 200, { ok: true, family: publicFamily(result.family) });
       return;
     }
@@ -289,6 +342,7 @@ const server = http.createServer(async (req, res) => {
         updatedAt: new Date().toISOString(),
         expiresAt: Date.now() + 3000,
       };
+      audit(result.family, "control_tap", { x: result.family.controlAction.x, y: result.family.controlAction.y });
       sendJson(res, 200, { ok: true, action: result.family.controlAction });
       return;
     }
@@ -314,6 +368,12 @@ const server = http.createServer(async (req, res) => {
         updatedAt: new Date().toISOString(),
         expiresAt: Date.now() + 6000,
       };
+      audit(result.family, "control_swipe", {
+        startX: result.family.controlAction.startX,
+        startY: result.family.controlAction.startY,
+        endX: result.family.controlAction.endX,
+        endY: result.family.controlAction.endY,
+      });
       sendJson(res, 200, { ok: true, action: result.family.controlAction });
       return;
     }
@@ -340,6 +400,7 @@ const server = http.createServer(async (req, res) => {
         updatedAt: new Date().toISOString(),
         expiresAt: Date.now() + 6000,
       };
+      audit(result.family, "control_global", { action });
       sendJson(res, 200, { ok: true, action: result.family.controlAction });
       return;
     }
@@ -364,6 +425,10 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(payload.authToken || "").trim();
       const result = requireMember(res, pairCode, authToken, "elder");
       if (!result) return;
+      if (String(payload.sessionId || "").trim() !== result.family.sessionId) {
+        sendJson(res, 409, { error: "stale session" });
+        return;
+      }
       result.family.webrtc.offer = {
         type: String(payload.type || "offer"),
         sdp: String(payload.sdp || ""),
@@ -392,6 +457,10 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(payload.authToken || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      if (String(payload.sessionId || "").trim() !== result.family.sessionId) {
+        sendJson(res, 409, { error: "stale session" });
+        return;
+      }
       result.family.webrtc.answer = {
         type: String(payload.type || "answer"),
         sdp: String(payload.sdp || ""),
@@ -419,6 +488,10 @@ const server = http.createServer(async (req, res) => {
       const role = from === "elder" ? "elder" : "family";
       const result = requireMember(res, pairCode, authToken, role);
       if (!result) return;
+      if (String(payload.sessionId || "").trim() !== result.family.sessionId) {
+        sendJson(res, 409, { error: "stale session" });
+        return;
+      }
       const item = {
         sdpMid: String(payload.sdpMid || ""),
         sdpMLineIndex: Number(payload.sdpMLineIndex || 0),
@@ -451,9 +524,15 @@ const server = http.createServer(async (req, res) => {
       const pairCode = String(url.searchParams.get("pairCode") || "").trim();
       const authToken = String(url.searchParams.get("authToken") || "").trim();
       const masked = url.searchParams.get("masked") === "1";
+      const sessionId = String(url.searchParams.get("sessionId") || "").trim();
       const result = requireMember(res, pairCode, authToken, "elder");
       if (!result) return;
       const { family } = result;
+      if (sessionId !== family.sessionId) {
+        res.writeHead(409, { "Access-Control-Allow-Origin": "*" });
+        res.end();
+        return;
+      }
       family.frame = await readBody(req);
       family.masked = masked;
       family.frameUpdatedAt = new Date().toISOString();
@@ -513,6 +592,15 @@ const server = http.createServer(async (req, res) => {
         result.family.annotation = null;
       }
       sendJson(res, 200, { annotation: result.family.annotation });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/audit") {
+      const pairCode = String(url.searchParams.get("pairCode") || "").trim();
+      const authToken = String(url.searchParams.get("authToken") || "").trim();
+      const result = requireMember(res, pairCode, authToken);
+      if (!result) return;
+      sendJson(res, 200, { ok: true, audit: result.family.audit.slice(-50) });
       return;
     }
 

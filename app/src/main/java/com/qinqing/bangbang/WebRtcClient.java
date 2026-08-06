@@ -43,6 +43,7 @@ final class WebRtcClient {
     private final String baseUrl;
     private final String pairCode;
     private final String authToken;
+    private final String sessionId;
     private final Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newCachedThreadPool();
@@ -56,11 +57,12 @@ final class WebRtcClient {
     private String role;
     private int remoteIceIndex;
 
-    WebRtcClient(Context context, String baseUrl, String pairCode, String authToken, Listener listener) {
+    WebRtcClient(Context context, String baseUrl, String pairCode, String authToken, String sessionId, Listener listener) {
         this.context = context.getApplicationContext();
         this.baseUrl = baseUrl;
         this.pairCode = pairCode;
         this.authToken = authToken;
+        this.sessionId = sessionId;
         this.listener = listener;
     }
 
@@ -138,11 +140,54 @@ final class WebRtcClient {
                 .setVideoDecoderFactory(decoderFactory)
                 .createPeerConnectionFactory();
 
-        List<PeerConnection.IceServer> iceServers = new ArrayList<>();
-        iceServers.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer());
+        List<PeerConnection.IceServer> iceServers = loadIceServers();
         PeerConnection.RTCConfiguration config = new PeerConnection.RTCConfiguration(iceServers);
         config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
         peerConnection = factory.createPeerConnection(config, observer);
+    }
+
+    private List<PeerConnection.IceServer> loadIceServers() {
+        List<PeerConnection.IceServer> servers = new ArrayList<>();
+        try {
+            JSONObject result = NetworkClient.getJson(baseUrl, "/api/ice-config");
+            JSONArray items = result.optJSONArray("iceServers");
+            if (items != null) {
+                for (int i = 0; i < items.length(); i++) {
+                    JSONObject item = items.getJSONObject(i);
+                    JSONArray urls = item.optJSONArray("urls");
+                    List<String> urlList = new ArrayList<>();
+                    if (urls != null) {
+                        for (int j = 0; j < urls.length(); j++) {
+                            String value = urls.optString(j, "");
+                            if (!value.isEmpty()) {
+                                urlList.add(value);
+                            }
+                        }
+                    } else {
+                        String single = item.optString("urls", "");
+                        if (!single.isEmpty()) {
+                            urlList.add(single);
+                        }
+                    }
+                    if (!urlList.isEmpty()) {
+                        PeerConnection.IceServer.Builder builder = PeerConnection.IceServer.builder(urlList);
+                        String username = item.optString("username", "");
+                        String credential = item.optString("credential", "");
+                        if (!username.isEmpty() || !credential.isEmpty()) {
+                            builder.setUsername(username).setPassword(credential);
+                        }
+                        servers.add(builder.createIceServer());
+                    }
+                }
+            }
+        } catch (Exception e) {
+            notifyState("ICE 配置获取失败，使用默认连接配置。");
+        }
+        if (servers.isEmpty()) {
+            servers.add(PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer());
+            servers.add(PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer());
+        }
+        return servers;
     }
 
     private void addScreenTrack(Intent projectionData) {
@@ -244,6 +289,7 @@ final class WebRtcClient {
                 NetworkClient.postJson(baseUrl, path, new JSONObject()
                         .put("pairCode", pairCode)
                         .put("authToken", authToken)
+                        .put("sessionId", sessionId)
                         .put("type", description.type.canonicalForm())
                         .put("sdp", description.description));
             } catch (Exception e) {
@@ -258,6 +304,7 @@ final class WebRtcClient {
                 NetworkClient.postJson(baseUrl, "/api/webrtc/ice", new JSONObject()
                         .put("pairCode", pairCode)
                         .put("authToken", authToken)
+                        .put("sessionId", sessionId)
                         .put("from", role)
                         .put("sdpMid", candidate.sdpMid)
                         .put("sdpMLineIndex", candidate.sdpMLineIndex)

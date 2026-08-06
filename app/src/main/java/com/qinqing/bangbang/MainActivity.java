@@ -59,6 +59,7 @@ public class MainActivity extends Activity {
     private static final long HELP_CONNECT_TIMEOUT_MS = 90_000;
     private static final long ACTION_BUTTON_RESET_MS = 1800;
     private static final long ANNOTATION_THROTTLE_MS = 850;
+    private static final String PREF_ASSIST_SESSION_ID = "assistSessionId";
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService statusIo = Executors.newSingleThreadExecutor();
@@ -89,6 +90,7 @@ public class MainActivity extends Activity {
     private boolean familyControlAllowed;
     private boolean rtcVideoReady;
     private boolean familyLastActive;
+    private String familyLastSessionId = "";
     private boolean captureRequestInProgress;
     private boolean inviteInProgress;
     private boolean bindInProgress;
@@ -173,17 +175,14 @@ public class MainActivity extends Activity {
                     .putLong("assistStartedAtMs", System.currentTimeMillis())
                     .apply();
             ensureOverlayReady();
-            if (isWebRtcEnabled()) {
-                startCaptureService(resultCode, data);
-                publishHelpRequest();
+            final Intent captureData = data;
+            publishHelpRequest(() -> {
+                startCaptureService(resultCode, captureData);
                 showElder();
-                setStatus("实时协助已开始，家属正在连接。需要结束时点“停止协助”。");
-            } else {
-                startCaptureService(resultCode, data);
-                publishHelpRequest();
-                showElder();
-                setStatus("协助已开始，家属正在连接。需要结束时点“停止协助”。");
-            }
+                setStatus(isWebRtcEnabled()
+                        ? "实时协助已开始，家属正在连接。需要结束时点“停止协助”。"
+                        : "协助已开始，家属正在连接。需要结束时点“停止协助”。");
+            });
         } else if (requestCode == REQUEST_CAPTURE) {
             prefs.edit().putBoolean("assistActive", false).apply();
             endHelpRequest();
@@ -448,6 +447,7 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         familyControlAllowed = false;
         rtcVideoReady = false;
+        familyLastSessionId = "";
         lastFrameReceivedAtMs = 0;
         lastFrameUpdatedAt = "";
         root = verticalRoot();
@@ -458,9 +458,11 @@ public class MainActivity extends Activity {
         View screenView = useWebRtc ? buildRtcView() : buildFrameView();
 
         Button controlRequestButton = secondaryButton("请求远程操作授权");
+        Button endButton = dangerButton("结束本次协助");
         Button refreshButton = primaryButton("立即刷新");
         Button backButton = secondaryButton("返回首页");
         controlRequestButton.setOnClickListener(v -> requestRemoteControl(controlRequestButton));
+        endButton.setOnClickListener(v -> endFamilyAssistView());
         refreshButton.setOnClickListener(v -> {
             if (!refreshButton.isEnabled()) {
                 return;
@@ -480,13 +482,10 @@ public class MainActivity extends Activity {
         root.addView(status);
         root.addView(controlRequestButton);
         root.addView(buildRemoteControlPanel());
+        root.addView(endButton);
         root.addView(refreshButton);
         root.addView(backButton);
         setContentView(scroll(root));
-        if (useWebRtc) {
-            startFamilyWebRtc();
-            scheduleWebRtcFallback();
-        }
         pollFamilyLoop();
     }
 
@@ -665,7 +664,9 @@ public class MainActivity extends Activity {
                         .put("elderName", displayName)
                         .put("deviceName", Build.MANUFACTURER + " " + Build.MODEL)
                         .put("masked", isPrivacyMasked());
-                NetworkClient.postJson(baseUrl, "/api/help", payload);
+                JSONObject result = NetworkClient.postJson(baseUrl, "/api/help", payload);
+                String sessionId = result.optString("sessionId", "");
+                prefs.edit().putString(PREF_ASSIST_SESSION_ID, sessionId).apply();
                 if (afterSuccess != null) {
                     main.post(afterSuccess);
                 }
@@ -768,11 +769,13 @@ public class MainActivity extends Activity {
             intent.putExtra(WebRtcScreenService.EXTRA_BASE_URL, baseUrl);
             intent.putExtra(WebRtcScreenService.EXTRA_PAIR_CODE, pairCode);
             intent.putExtra(WebRtcScreenService.EXTRA_AUTH_TOKEN, authToken);
+            intent.putExtra(WebRtcScreenService.EXTRA_SESSION_ID, prefs.getString(PREF_ASSIST_SESSION_ID, ""));
             intent.putExtra(WebRtcScreenService.EXTRA_RESULT_DATA, data);
         } else {
             intent.putExtra(CaptureService.EXTRA_BASE_URL, baseUrl);
             intent.putExtra(CaptureService.EXTRA_PAIR_CODE, pairCode);
             intent.putExtra(CaptureService.EXTRA_AUTH_TOKEN, authToken);
+            intent.putExtra(CaptureService.EXTRA_SESSION_ID, prefs.getString(PREF_ASSIST_SESSION_ID, ""));
             intent.putExtra(CaptureService.EXTRA_RESULT_CODE, resultCode);
             intent.putExtra(CaptureService.EXTRA_RESULT_DATA, data);
         }
@@ -789,7 +792,8 @@ public class MainActivity extends Activity {
             try {
                 NetworkClient.postJson(baseUrl, "/api/end", new JSONObject()
                         .put("pairCode", pairCode)
-                        .put("authToken", authToken));
+                        .put("authToken", authToken)
+                        .put("sessionId", prefs.getString(PREF_ASSIST_SESSION_ID, "")));
             } catch (Exception ignored) {
             }
         });
@@ -797,7 +801,7 @@ public class MainActivity extends Activity {
 
     private void startFamilyWebRtc() {
         stopFamilyWebRtc();
-        familyRtcClient = new WebRtcClient(this, baseUrl, pairCode, authToken, new WebRtcClient.Listener() {
+        familyRtcClient = new WebRtcClient(this, baseUrl, pairCode, authToken, familyLastSessionId, new WebRtcClient.Listener() {
             @Override
             public void onState(String text) {
                 if (isAuthFailureText(text)) {
@@ -835,16 +839,31 @@ public class MainActivity extends Activity {
         rtcVideoReady = false;
     }
 
-    private void scheduleWebRtcFallback() {
+    private void scheduleWebRtcFallback(String expectedSessionId) {
         main.postDelayed(() -> {
-            if (!familyPolling || !isWebRtcEnabled() || rtcVideoReady) {
+            if (!familyPolling || !isWebRtcEnabled() || rtcVideoReady || !expectedSessionId.equals(familyLastSessionId)) {
                 return;
             }
-            prefs.edit().putBoolean("webRtcEnabled", false).apply();
             stopFamilyWebRtc();
-            showFamily();
-            setStatus("实时画面暂时未连上，已自动切到稳定屏幕模式。");
+            setStatus("实时画面暂时未连上。已断开本次实时连接，请让长辈点“重新发起协助”后会自动重连。");
         }, 8000);
+    }
+
+    private void endFamilyAssistView() {
+        familyLastActive = false;
+        familyLastSessionId = "";
+        familyControlAllowed = false;
+        lastFrameReceivedAtMs = 0;
+        lastFrameUpdatedAt = "";
+        stopFamilyWebRtc();
+        clearFamilyScreen();
+        setStatus("已退出本次协助。长辈再次发起后会自动连接。");
+    }
+
+    private void clearFamilyScreen() {
+        if (frameView != null) {
+            frameView.setImageDrawable(null);
+        }
     }
 
     private void pollFamilyLoop() {
@@ -869,13 +888,29 @@ public class MainActivity extends Activity {
                 familyLastActive = active;
                 familyControlAllowed = help.optBoolean("controlAllowed", false);
                 if (!active) {
-                    main.post(() -> setStatus("正在等待协助请求..."));
+                    main.post(() -> {
+                        familyLastSessionId = "";
+                        stopFamilyWebRtc();
+                        clearFamilyScreen();
+                        setStatus("正在等待协助请求...");
+                    });
                     return;
                 }
                 String elderName = help.optString("elderName", "长辈");
                 String updatedAt = help.optString("updatedAt", "");
                 String frameUpdatedAt = help.optString("frameUpdatedAt", "");
+                String sessionId = help.optString("sessionId", "");
                 main.post(() -> {
+                    if (!sessionId.equals(familyLastSessionId)) {
+                        familyLastSessionId = sessionId;
+                        lastFrameReceivedAtMs = 0;
+                        lastFrameUpdatedAt = "";
+                        rtcVideoReady = false;
+                        if (isWebRtcEnabled()) {
+                            startFamilyWebRtc();
+                            scheduleWebRtcFallback(sessionId);
+                        }
+                    }
                     String controlText = familyControlAllowed ? "远程点击已授权。" : "未授权远程点击。";
                     if (lastFrameReceivedAtMs == 0) {
                         setStatus("正在协助 " + elderName + "，正在接收第一张画面。" + controlText);
@@ -1241,6 +1276,7 @@ public class MainActivity extends Activity {
         prefs.edit()
                 .remove("authToken")
                 .remove("memberRole")
+                .remove(PREF_ASSIST_SESSION_ID)
                 .remove("pendingInviteCode")
                 .remove("pendingControlRequestAt")
                 .remove("handledControlRequestAt")
@@ -1288,6 +1324,7 @@ public class MainActivity extends Activity {
                 .putBoolean("remoteControlAllowed", false)
                 .putBoolean("assistActive", false)
                 .remove("assistStartedAtMs")
+                .remove(PREF_ASSIST_SESSION_ID)
                 .apply();
     }
 
@@ -1483,7 +1520,7 @@ public class MainActivity extends Activity {
             editor.putBoolean("remoteControlAllowed", false);
         }
         if (!prefs.contains("webRtcEnabled")) {
-            editor.putBoolean("webRtcEnabled", false);
+            editor.putBoolean("webRtcEnabled", true);
         }
         editor.apply();
     }
@@ -1520,7 +1557,7 @@ public class MainActivity extends Activity {
     private void showAccessibilityGuide() {
         new AlertDialog.Builder(this)
                 .setTitle("需要开启辅助服务")
-                .setMessage("接下来会打开系统设置。请找到“亲情帮帮”，打开开关，然后按返回键回到这里。不会开启时，可以先让家属用画圈提示帮你。")
+                .setMessage(accessibilityGuideText())
                 .setPositiveButton("去开启", (dialog, which) -> {
                     refreshElderOnResume = true;
                     elderScreenVisible = true;
@@ -1528,6 +1565,27 @@ public class MainActivity extends Activity {
                 })
                 .setNegativeButton("先不用", null)
                 .show();
+    }
+
+    private String accessibilityGuideText() {
+        String brand = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase();
+        String common = "接下来会打开系统设置。请找到“亲情帮帮”，打开开关，然后按返回键回到这里。";
+        if (brand.contains("vivo")) {
+            return common + "\n\nvivo 常见位置：无障碍 > 已下载的服务 > 亲情帮帮 > 开启。";
+        }
+        if (brand.contains("oppo") || brand.contains("realme") || brand.contains("oneplus")) {
+            return common + "\n\nOPPO/realme 常见位置：无障碍 > 已下载的应用 > 亲情帮帮 > 开启。";
+        }
+        if (brand.contains("xiaomi") || brand.contains("redmi")) {
+            return common + "\n\n小米/Redmi 常见位置：更多设置 > 无障碍 > 已下载的应用 > 亲情帮帮 > 开启。";
+        }
+        if (brand.contains("huawei") || brand.contains("honor")) {
+            return common + "\n\n华为/荣耀常见位置：辅助功能 > 无障碍 > 已安装的服务 > 亲情帮帮 > 开启。";
+        }
+        if (brand.contains("samsung")) {
+            return common + "\n\n三星常见位置：辅助功能 > 已安装的应用程序 > 亲情帮帮 > 开启。";
+        }
+        return common + "\n\n如果列表较长，可以让家属用画圈提示帮你找到“亲情帮帮”。";
     }
 
     private void openAccessibilityServiceSettings() {
