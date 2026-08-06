@@ -3,16 +3,19 @@ package com.qinqing.bangbang;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.Configuration;
 import android.content.pm.PackageManager;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Color;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -26,8 +29,11 @@ import android.provider.Settings;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -128,9 +134,14 @@ public class MainActivity extends Activity {
     private Button familyRemoteButton;
     private Button familyEndButton;
     private LinearLayout familyActionBar;
-    private TextView familyControlStateView;
     private TextView familyScreenLabelView;
     private FrameLayout familyScreenSurface;
+    private ImageButton familyFullscreenButton;
+    private Dialog familyFullscreenDialog;
+    private TextView familyFullscreenModeView;
+    private Button familyFullscreenControlRequestButton;
+    private Button familyFullscreenRemoteButton;
+    private Button familyFullscreenEndButton;
     private LinearLayout familyWaitingView;
     private TextView familyWaitingTitle;
     private TextView familyWaitingCaption;
@@ -171,11 +182,11 @@ public class MainActivity extends Activity {
         }
     };
 
-    private static final int COLOR_BG = 0xFFFFFBF7;
+    private static final int COLOR_BG = 0xFFF7F9FC;
     private static final int COLOR_SURFACE = 0xFFFFFFFF;
     private static final int COLOR_TEXT = 0xFF172033;
-    private static final int COLOR_MUTED = 0xFF697386;
-    private static final int COLOR_LINE = 0xFFE7E0D8;
+    private static final int COLOR_MUTED = 0xFF64748B;
+    private static final int COLOR_LINE = 0xFFDDE4EE;
     private static final int COLOR_BLUE = 0xFF2563EB;
     private static final int COLOR_BLUE_DARK = 0xFF1D4ED8;
     private static final int COLOR_GREEN = 0xFF12B981;
@@ -204,6 +215,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        closeFamilyFullscreen();
         prefs.edit().putBoolean("appForeground", false).apply();
         main.removeCallbacks(assistEndedUiLoop);
         main.removeCallbacks(familyPollLoopRunnable);
@@ -270,8 +282,18 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (familyFullscreenDialog != null && familyFullscreenDialog.isShowing()) {
+            applyFullscreenSystemUi(familyFullscreenDialog.getWindow());
+        }
+    }
+
+    @Override
     public void onBackPressed() {
-        if ("home".equals(currentPage)) {
+        if (familyFullscreenDialog != null && familyFullscreenDialog.isShowing()) {
+            closeFamilyFullscreen();
+        } else if ("home".equals(currentPage)) {
             super.onBackPressed();
         } else if ("settings".equals(currentPage) || "privacy".equals(currentPage)) {
             showProfile();
@@ -650,6 +672,7 @@ public class MainActivity extends Activity {
     }
 
     private void showFamily() {
+        closeFamilyFullscreen();
         currentPage = "family";
         prefs.edit().putBoolean("elderPageVisible", false).apply();
         if (!isBoundAs("family")) {
@@ -672,8 +695,6 @@ public class MainActivity extends Activity {
         root.addView(compactPageTitle("协助长辈"));
         status = stableNotice("连接正常");
         status.setVisibility(View.GONE);
-        familyControlStateView = stableNotice("");
-        familyControlStateView.setVisibility(View.GONE);
         boolean useWebRtc = isWebRtcEnabled();
         View screenView = buildFrameView();
 
@@ -695,12 +716,16 @@ public class MainActivity extends Activity {
         });
 
         root.addView(status);
-        root.addView(familyControlStateView);
         familyWaitingView = card("等待求助", "长辈发起求助后，屏幕会自动显示。");
         familyWaitingTitle = (TextView) familyWaitingView.getChildAt(0);
         familyWaitingCaption = (TextView) familyWaitingView.getChildAt(1);
-        familyScreenLabelView = screenLabel(useWebRtc ? "长辈实时屏幕 · 点画面可提示" : "长辈屏幕 · 点画面可提示");
+        familyScreenLabelView = screenLabel(useWebRtc ? "长辈实时屏幕" : "长辈屏幕");
         familyScreenSurface = screenSurface(screenView);
+        familyFullscreenButton = fullscreenIconButton(R.drawable.ic_fullscreen, "全屏查看");
+        familyFullscreenButton.setOnClickListener(v -> openFamilyFullscreen());
+        FrameLayout.LayoutParams fullscreenParams = new FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP | Gravity.END);
+        fullscreenParams.setMargins(0, dp(10), dp(10), 0);
+        familyScreenSurface.addView(familyFullscreenButton, fullscreenParams);
         root.addView(familyWaitingView);
         root.addView(familyScreenLabelView);
         root.addView(familyScreenSurface);
@@ -810,6 +835,234 @@ public class MainActivity extends Activity {
         addFamilyAction(bar, familyChangeBindingButton);
         familyRemoteButton.setVisibility(View.GONE);
         return bar;
+    }
+
+    private void openFamilyFullscreen() {
+        if (!familyLastActive || !familyMediaReady || frameView == null || frameView.getDrawable() == null
+                || familyFullscreenDialog != null) {
+            return;
+        }
+        detachFromParent(frameView);
+        frameView.setPadding(0, 0, 0, 0);
+        frameView.setMinimumHeight(0);
+
+        Dialog dialog = new Dialog(this, android.R.style.Theme_Material_Light_NoActionBar);
+        familyFullscreenDialog = dialog;
+        LinearLayout stage = new LinearLayout(this);
+        stage.setOrientation(LinearLayout.VERTICAL);
+        stage.setBackgroundColor(0xFF05070B);
+
+        LinearLayout topBar = fullscreenTopBar();
+        stage.addView(topBar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+
+        FrameLayout canvas = new FrameLayout(this);
+        canvas.setBackgroundColor(0xFF05070B);
+        canvas.addView(frameView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        stage.addView(canvas, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
+
+        LinearLayout bottomBar = fullscreenActionBar();
+        stage.addView(bottomBar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+        applyFullscreenInsets(stage, topBar, bottomBar);
+
+        dialog.setContentView(stage);
+        dialog.setCancelable(true);
+        dialog.setOnDismissListener(ignored -> restoreFamilyScreenFromFullscreen());
+        dialog.show();
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new ColorDrawable(Color.BLACK));
+            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+            applyFullscreenSystemUi(window);
+        }
+        updateFullscreenControlState();
+    }
+
+    private LinearLayout fullscreenTopBar() {
+        LinearLayout bar = horizontalRow();
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(10), dp(8), dp(12), dp(8));
+        bar.setBackgroundColor(0xD9151A24);
+
+        ImageButton close = fullscreenIconButton(R.drawable.ic_fullscreen_exit, "退出全屏");
+        close.setOnClickListener(v -> closeFamilyFullscreen());
+        bar.addView(close, new LinearLayout.LayoutParams(dp(44), dp(44)));
+
+        TextView title = new TextView(this);
+        title.setText("长辈屏幕");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(18);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        titleParams.setMargins(dp(10), 0, dp(8), 0);
+        title.setGravity(Gravity.CENTER_VERTICAL);
+        bar.addView(title, titleParams);
+
+        familyFullscreenModeView = new TextView(this);
+        familyFullscreenModeView.setTextSize(13);
+        familyFullscreenModeView.setTextColor(Color.WHITE);
+        familyFullscreenModeView.setGravity(Gravity.CENTER);
+        familyFullscreenModeView.setPadding(dp(10), dp(7), dp(10), dp(7));
+        familyFullscreenModeView.setBackground(rounded(0xCC243044, dp(8), 0x004B5563));
+        bar.addView(familyFullscreenModeView);
+        return bar;
+    }
+
+    private LinearLayout fullscreenActionBar() {
+        LinearLayout bar = horizontalRow();
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(10), dp(8), dp(10), dp(8));
+        bar.setBackgroundColor(0xE6141821);
+
+        familyFullscreenControlRequestButton = darkToolbarButton("申请远程操作");
+        familyFullscreenRemoteButton = darkToolbarButton("操作菜单");
+        familyFullscreenEndButton = darkToolbarDangerButton("结束协助");
+        familyFullscreenControlRequestButton.setOnClickListener(v -> requestRemoteControl(familyFullscreenControlRequestButton));
+        familyFullscreenRemoteButton.setOnClickListener(v -> showRemoteControlPanel());
+        familyFullscreenEndButton.setOnClickListener(v -> {
+            closeFamilyFullscreen();
+            endFamilyAssistView();
+        });
+        addFamilyAction(bar, familyFullscreenControlRequestButton);
+        addFamilyAction(bar, familyFullscreenRemoteButton);
+        addFamilyAction(bar, familyFullscreenEndButton);
+        return bar;
+    }
+
+    private Button darkToolbarButton(String text) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setTextSize(14);
+        button.setTextColor(Color.WHITE);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setAllCaps(false);
+        button.setMinHeight(0);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        button.setBackground(rounded(0xFF263246, dp(8), 0xFF40506A));
+        return button;
+    }
+
+    private Button darkToolbarDangerButton(String text) {
+        Button button = darkToolbarButton(text);
+        button.setBackground(rounded(0xFFB4232C, dp(8), 0xFFD24751));
+        return button;
+    }
+
+    private ImageButton fullscreenIconButton(int iconRes, String description) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(iconRes);
+        button.setColorFilter(Color.WHITE);
+        button.setContentDescription(description);
+        if (Build.VERSION.SDK_INT >= 26) {
+            button.setTooltipText(description);
+        }
+        button.setPadding(dp(10), dp(10), dp(10), dp(10));
+        button.setBackground(rounded(0xCC172033, dp(8), 0x6677849A));
+        return button;
+    }
+
+    private void applyFullscreenInsets(View stage, View topBar, View bottomBar) {
+        stage.setOnApplyWindowInsetsListener((view, insets) -> {
+            int top = stableTopInset(insets);
+            int bottom = stableBottomInset(insets);
+            topBar.setPadding(dp(10), dp(8) + top, dp(12), dp(8));
+            int side = fullscreenActionSidePadding(view.getWidth());
+            bottomBar.setPadding(side, dp(8), side, dp(8) + bottom);
+            return insets;
+        });
+        stage.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            int side = fullscreenActionSidePadding(right - left);
+            int currentBottom = bottomBar.getPaddingBottom();
+            bottomBar.setPadding(side, dp(8), side, currentBottom);
+        });
+    }
+
+    private int fullscreenActionSidePadding(int width) {
+        return Math.max(dp(10), (width - dp(520)) / 2);
+    }
+
+    private int stableTopInset(WindowInsets insets) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            return insets.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars()).top;
+        }
+        return insets.getStableInsetTop();
+    }
+
+    private int stableBottomInset(WindowInsets insets) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            return insets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars()).bottom;
+        }
+        return insets.getStableInsetBottom();
+    }
+
+    private void applyFullscreenSystemUi(Window window) {
+        if (window == null) return;
+        window.setStatusBarColor(Color.BLACK);
+        window.setNavigationBarColor(Color.BLACK);
+        if (Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false);
+            WindowInsetsController controller = window.getInsetsController();
+            if (controller != null) {
+                controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        } else {
+            window.getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                            | View.SYSTEM_UI_FLAG_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            );
+        }
+    }
+
+    private void closeFamilyFullscreen() {
+        Dialog dialog = familyFullscreenDialog;
+        if (dialog != null) {
+            dialog.dismiss();
+        }
+    }
+
+    private void restoreFamilyScreenFromFullscreen() {
+        detachFromParent(frameView);
+        familyFullscreenDialog = null;
+        familyFullscreenModeView = null;
+        familyFullscreenControlRequestButton = null;
+        familyFullscreenRemoteButton = null;
+        familyFullscreenEndButton = null;
+        if (frameView != null) {
+            frameView.setPadding(dp(8), dp(8), dp(8), dp(8));
+            frameView.setMinimumHeight(dp(430));
+        }
+        if (familyScreenSurface != null && frameView != null && frameView.getParent() == null
+                && "family".equals(currentPage)) {
+            familyScreenSurface.addView(frameView, 0, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+            ));
+            if (familyFullscreenButton != null) familyFullscreenButton.bringToFront();
+        }
+        configureSystemBars();
+    }
+
+    private void detachFromParent(View view) {
+        if (view != null && view.getParent() instanceof ViewGroup) {
+            ((ViewGroup) view.getParent()).removeView(view);
+        }
     }
 
     private void addFamilyAction(LinearLayout row, Button button) {
@@ -1408,6 +1661,7 @@ public class MainActivity extends Activity {
                 resizeFamilyScreenSurface(dp(2));
             }
         } else {
+            closeFamilyFullscreen();
             familyMediaReady = false;
             updateFamilyWaiting("等待求助", "长辈发起求助后，屏幕会自动显示。");
             updateFamilyControlButton(false, false);
@@ -1416,6 +1670,7 @@ public class MainActivity extends Activity {
         if (familyWaitingView != null) familyWaitingView.setVisibility(active && familyMediaReady ? View.GONE : View.VISIBLE);
         if (familyScreenLabelView != null) familyScreenLabelView.setVisibility(active && familyMediaReady ? View.VISIBLE : View.GONE);
         if (familyScreenSurface != null) familyScreenSurface.setVisibility(active && familyMediaReady ? View.VISIBLE : View.GONE);
+        if (familyFullscreenButton != null) familyFullscreenButton.setVisibility(active && familyMediaReady ? View.VISIBLE : View.GONE);
         if (familyChangeBindingButton != null) familyChangeBindingButton.setVisibility(active ? View.GONE : View.VISIBLE);
         setFamilySessionActionsVisible(active);
     }
@@ -1442,6 +1697,10 @@ public class MainActivity extends Activity {
             if (mediaView == frameView) {
                 frameView.bringToFront();
             }
+        }
+        if (familyFullscreenButton != null && familyFullscreenDialog == null) {
+            familyFullscreenButton.setVisibility(View.VISIBLE);
+            familyFullscreenButton.bringToFront();
         }
         familyWaitingView.setVisibility(View.GONE);
         familyScreenLabelView.setVisibility(View.VISIBLE);
@@ -1668,51 +1927,44 @@ public class MainActivity extends Activity {
         if (familyControlRequestButton == null) {
             return;
         }
-        familyControlRequestButton.setTag(null);
-        if (allowed) {
-            familyControlRequestButton.setVisibility(View.GONE);
-            if (familyRemoteButton != null) familyRemoteButton.setVisibility(View.VISIBLE);
-        } else if (requested) {
-            familyControlRequestButton.setVisibility(View.VISIBLE);
-            familyControlRequestButton.setText("等待长辈授权");
-            familyControlRequestButton.setEnabled(false);
-            familyControlRequestButton.setAlpha(0.72f);
-            if (familyRemoteButton != null) familyRemoteButton.setVisibility(View.GONE);
-        } else {
-            familyControlRequestButton.setVisibility(View.VISIBLE);
-            familyControlRequestButton.setText("denied".equals(decision) || "setup_required".equals(decision)
-                    ? "再次申请远程操作" : "申请远程操作");
-            familyControlRequestButton.setEnabled(true);
-            familyControlRequestButton.setAlpha(1f);
-            if (familyRemoteButton != null) familyRemoteButton.setVisibility(View.GONE);
-        }
-        updateFamilyControlNotice(decision, reason);
+        applyControlButtonState(familyControlRequestButton, familyRemoteButton, requested, allowed, decision);
+        applyControlButtonState(familyFullscreenControlRequestButton, familyFullscreenRemoteButton,
+                requested, allowed, decision);
+        updateFullscreenControlState();
         maybeShowFamilyControlResult(decision, updatedAt);
     }
 
-    private void updateFamilyControlNotice(String decision, String reason) {
-        if (familyControlStateView == null) return;
-        int background;
-        String text;
-        if ("pending".equals(decision)) {
-            text = "远程操作：等待长辈确认";
-            background = 0xFFFFF7E6;
-        } else if ("allowed".equals(decision)) {
-            text = "远程操作：长辈已允许本次协助";
-            background = 0xFFECFDF5;
-        } else if ("setup_required".equals(decision) || "accessibility_not_enabled".equals(reason)) {
-            text = "远程操作未开启：长辈尚未完成辅助服务设置";
-            background = 0xFFFFF1F2;
-        } else if ("denied".equals(decision)) {
-            text = "远程操作：长辈本次未允许";
-            background = 0xFFFFF1F2;
+    private void applyControlButtonState(Button requestButton, Button remoteButton,
+                                         boolean requested, boolean allowed, String decision) {
+        if (requestButton == null) return;
+        requestButton.setTag(null);
+        if (allowed) {
+            requestButton.setVisibility(View.GONE);
+            if (remoteButton != null) remoteButton.setVisibility(View.VISIBLE);
+        } else if (requested) {
+            requestButton.setVisibility(View.VISIBLE);
+            requestButton.setText("等待长辈授权");
+            requestButton.setEnabled(false);
+            requestButton.setAlpha(0.72f);
+            if (remoteButton != null) remoteButton.setVisibility(View.GONE);
         } else {
-            familyControlStateView.setVisibility(View.GONE);
-            return;
+            requestButton.setVisibility(View.VISIBLE);
+            requestButton.setText("denied".equals(decision) || "setup_required".equals(decision)
+                    ? "再次申请远程操作" : "申请远程操作");
+            requestButton.setEnabled(true);
+            requestButton.setAlpha(1f);
+            if (remoteButton != null) remoteButton.setVisibility(View.GONE);
         }
-        familyControlStateView.setText(text);
-        familyControlStateView.setBackground(rounded(background, dp(8), COLOR_LINE));
-        familyControlStateView.setVisibility(View.VISIBLE);
+    }
+
+    private void updateFullscreenControlState() {
+        if (familyFullscreenModeView == null) return;
+        familyFullscreenModeView.setText(familyControlAllowed ? "远程操作" : "画圈提示");
+        familyFullscreenModeView.setBackground(rounded(
+                familyControlAllowed ? 0xCC166534 : 0xCC243044,
+                dp(8),
+                0x004B5563
+        ));
     }
 
     private void maybeShowFamilyControlResult(String decision, String updatedAt) {
