@@ -65,6 +65,37 @@ public class MainActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService statusIo = Executors.newSingleThreadExecutor();
     private final ExecutorService mediaIo = Executors.newSingleThreadExecutor();
+    private final Runnable familyPollLoopRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!familyPolling) {
+                return;
+            }
+            pollFamilyOnce();
+            main.postDelayed(this, familyLastActive ? FAMILY_ACTIVE_POLL_MS : FAMILY_WAIT_POLL_MS);
+        }
+    };
+    private final Runnable elderAnnotationLoopRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!elderAnnotationPolling) {
+                return;
+            }
+            pollElderAnnotationOnce();
+            pollElderStatusOnce();
+            main.postDelayed(this, ELDER_STATUS_POLL_MS);
+        }
+    };
+    private final Runnable elderBindLoopRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (!elderBindPolling || authToken.isEmpty()) {
+                return;
+            }
+            pollElderBindOnce();
+            main.postDelayed(this, 1200);
+        }
+    };
 
     private LinearLayout root;
     private SharedPreferences prefs;
@@ -102,6 +133,9 @@ public class MainActivity extends Activity {
     private boolean rtcVideoReady;
     private boolean rtcTrackAttached;
     private boolean familyMediaReady;
+    private int rtcFrameWidth;
+    private int rtcFrameHeight;
+    private int rtcFrameRotation;
     private boolean assistEndPromptShowing;
     private boolean familyLastActive;
     private boolean elderInviteBoundShown;
@@ -164,6 +198,9 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         prefs.edit().putBoolean("appForeground", false).apply();
         main.removeCallbacks(assistEndedUiLoop);
+        main.removeCallbacks(familyPollLoopRunnable);
+        main.removeCallbacks(elderAnnotationLoopRunnable);
+        main.removeCallbacks(elderBindLoopRunnable);
         familyPolling = false;
         elderAnnotationPolling = false;
         elderBindPolling = false;
@@ -621,7 +658,7 @@ public class MainActivity extends Activity {
         }
         root.addView(bottomNav("family"));
         setContentView(scroll(root));
-        pollFamilyLoop();
+        startFamilyPollLoop();
     }
 
     private View buildFrameView() {
@@ -690,8 +727,12 @@ public class MainActivity extends Activity {
                 if (familyControlAllowed) {
                     handleRemoteTouchOnView(view, event.getX(), event.getY());
                 } else {
-                    float[] point = normalizedViewPoint(view, event.getX(), event.getY());
-                    sendAnnotation(point[0], point[1]);
+                    float[] point = normalizedRtcPoint(view, event.getX(), event.getY());
+                    if (point == null) {
+                        setStatus("请点击屏幕画面内的内容区域");
+                    } else {
+                        sendAnnotation(point[0], point[1]);
+                    }
                 }
                 return true;
             }
@@ -1092,6 +1133,11 @@ public class MainActivity extends Activity {
 
                 @Override
                 public void onFrameResolutionChanged(int width, int height, int rotation) {
+                    main.post(() -> {
+                        rtcFrameWidth = width;
+                        rtcFrameHeight = height;
+                        rtcFrameRotation = rotation;
+                    });
                 }
             });
         }
@@ -1109,6 +1155,9 @@ public class MainActivity extends Activity {
         }
         rtcVideoReady = false;
         rtcTrackAttached = false;
+        rtcFrameWidth = 0;
+        rtcFrameHeight = 0;
+        rtcFrameRotation = 0;
     }
 
     private void scheduleWebRtcFallback(String expectedSessionId) {
@@ -1177,14 +1226,18 @@ public class MainActivity extends Activity {
     private void setFamilySessionActive(boolean active) {
         if (active) {
             updateFamilyWaiting("正在连接屏幕", "画面出现后即可开始协助。");
+            if (!familyMediaReady && familyScreenSurface != null) {
+                resizeFamilyScreenSurface(dp(2));
+            }
         } else {
             familyMediaReady = false;
             updateFamilyWaiting("等待长辈开始", "长辈开始协助后，屏幕会自动显示。");
             updateFamilyControlButton(false, false);
+            resizeFamilyScreenSurface(dp(500));
         }
         if (familyWaitingView != null) familyWaitingView.setVisibility(active && familyMediaReady ? View.GONE : View.VISIBLE);
         if (familyScreenLabelView != null) familyScreenLabelView.setVisibility(active && familyMediaReady ? View.VISIBLE : View.GONE);
-        if (familyScreenSurface != null) familyScreenSurface.setVisibility(active && familyMediaReady ? View.VISIBLE : View.GONE);
+        if (familyScreenSurface != null) familyScreenSurface.setVisibility(active ? View.VISIBLE : View.GONE);
         if (familyChangeBindingButton != null) familyChangeBindingButton.setVisibility(active ? View.GONE : View.VISIBLE);
         setFamilySessionActionsVisible(active);
     }
@@ -1200,22 +1253,46 @@ public class MainActivity extends Activity {
         }
         familyMediaReady = true;
         familyScreenSurface.removeAllViews();
-        familyScreenSurface.addView(mediaView, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
-        ));
+        resizeFamilyScreenSurface(dp(500));
+        if (isWebRtcEnabled() && mediaView == frameView && rtcView != null) {
+            familyScreenSurface.addView(rtcView, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(2)
+            ));
+            familyScreenSurface.addView(frameView, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    0,
+                    1f
+            ));
+        } else {
+            familyScreenSurface.addView(mediaView, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.MATCH_PARENT
+            ));
+        }
         familyWaitingView.setVisibility(View.GONE);
         familyScreenLabelView.setVisibility(View.VISIBLE);
         familyScreenSurface.setVisibility(View.VISIBLE);
         setStatus(stateText);
     }
 
-    private void pollFamilyLoop() {
-        if (!familyPolling) {
+    private void resizeFamilyScreenSurface(int height) {
+        if (familyScreenSurface == null) {
             return;
         }
-        pollFamilyOnce();
-        main.postDelayed(this::pollFamilyLoop, familyLastActive ? FAMILY_ACTIVE_POLL_MS : FAMILY_WAIT_POLL_MS);
+        LinearLayout.LayoutParams params = (LinearLayout.LayoutParams) familyScreenSurface.getLayoutParams();
+        if (params == null) {
+            params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, height);
+            params.setMargins(0, 0, 0, dp(10));
+        } else {
+            params.height = height;
+        }
+        familyScreenSurface.setLayoutParams(params);
+    }
+
+    private void startFamilyPollLoop() {
+        main.removeCallbacks(familyPollLoopRunnable);
+        main.post(familyPollLoopRunnable);
     }
 
     private void pollFamilyOnce() {
@@ -1353,6 +1430,7 @@ public class MainActivity extends Activity {
                         .put("y", y)
                         .put("radius", 0.08)
                         .put("label", "请点这里")
+                        .put("sessionId", familyLastSessionId)
                         .put("frameUpdatedAt", lastFrameUpdatedAt);
                 NetworkClient.postJson(baseUrl, "/api/annotation", payload);
                 main.post(() -> setStatus("画圈提示已发送，几秒后会自动消失。"));
@@ -1518,8 +1596,12 @@ public class MainActivity extends Activity {
 
     private void handleRemoteTouchOnView(View view, float endX, float endY) {
         float distance = (float) Math.hypot(endX - screenTouchStartX, endY - screenTouchStartY);
-        float[] start = normalizedViewPoint(view, screenTouchStartX, screenTouchStartY);
-        float[] end = normalizedViewPoint(view, endX, endY);
+        float[] start = normalizedRtcPoint(view, screenTouchStartX, screenTouchStartY);
+        float[] end = normalizedRtcPoint(view, endX, endY);
+        if (start == null || end == null) {
+            setStatus("请在屏幕画面内完成操作");
+            return;
+        }
         if (distance > dp(42)) {
             sendRemoteSwipe(start[0], start[1], end[0], end[1], gestureDuration());
         } else {
@@ -1568,19 +1650,45 @@ public class MainActivity extends Activity {
         };
     }
 
-    private void pollElderAnnotationLoop() {
-        if (!elderAnnotationPolling) {
-            return;
+    private float[] normalizedRtcPoint(View view, float touchX, float touchY) {
+        if (view == null || rtcFrameWidth <= 0 || rtcFrameHeight <= 0) {
+            return normalizedViewPoint(view, touchX, touchY);
         }
-        pollElderAnnotationOnce();
-        pollElderStatusOnce();
-        main.postDelayed(this::pollElderAnnotationLoop, ELDER_STATUS_POLL_MS);
+        int sourceWidth = rtcFrameWidth;
+        int sourceHeight = rtcFrameHeight;
+        if (Math.abs(rtcFrameRotation) % 180 != 0) {
+            int swapped = sourceWidth;
+            sourceWidth = sourceHeight;
+            sourceHeight = swapped;
+        }
+        int viewWidth = Math.max(1, view.getWidth());
+        int viewHeight = Math.max(1, view.getHeight());
+        float scale = Math.min(viewWidth / (float) sourceWidth, viewHeight / (float) sourceHeight);
+        float displayedWidth = sourceWidth * scale;
+        float displayedHeight = sourceHeight * scale;
+        float left = (viewWidth - displayedWidth) / 2f;
+        float top = (viewHeight - displayedHeight) / 2f;
+        if (touchX < left || touchX > left + displayedWidth
+                || touchY < top || touchY > top + displayedHeight) {
+            return null;
+        }
+        return new float[]{
+                (touchX - left) / Math.max(1f, displayedWidth),
+                (touchY - top) / Math.max(1f, displayedHeight)
+        };
+    }
+
+    private void pollElderAnnotationLoop() {
+        main.removeCallbacks(elderAnnotationLoopRunnable);
+        main.post(elderAnnotationLoopRunnable);
     }
 
     private void pollElderBindLoop() {
-        if (!elderBindPolling || authToken.isEmpty()) {
-            return;
-        }
+        main.removeCallbacks(elderBindLoopRunnable);
+        main.post(elderBindLoopRunnable);
+    }
+
+    private void pollElderBindOnce() {
         statusIo.execute(() -> {
             try {
                 JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
@@ -1615,7 +1723,6 @@ public class MainActivity extends Activity {
                 main.post(() -> setStatus("正在等待家属绑定。网络检查失败：" + e.getMessage()));
             }
         });
-        main.postDelayed(this::pollElderBindLoop, 1200);
     }
 
     private void pollElderAnnotationOnce() {

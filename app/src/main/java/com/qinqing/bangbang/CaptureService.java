@@ -53,8 +53,7 @@ public class CaptureService extends Service {
     private String pairCode;
     private String authToken;
     private String sessionId;
-    private long lastControlCheckMs;
-    private long lastSessionCheckMs;
+    private long lastAssistStateCheckMs;
     private boolean destroyed;
 
     @Override
@@ -70,6 +69,10 @@ public class CaptureService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         showForeground();
+        if (intent == null) {
+            stopSelf();
+            return START_NOT_STICKY;
+        }
         baseUrl = intent.getStringExtra(EXTRA_BASE_URL);
         pairCode = intent.getStringExtra(EXTRA_PAIR_CODE);
         authToken = intent.getStringExtra(EXTRA_AUTH_TOKEN);
@@ -81,7 +84,7 @@ public class CaptureService extends Service {
             return START_NOT_STICKY;
         }
         startProjection(resultCode, resultData);
-        return START_STICKY;
+        return START_NOT_STICKY;
     }
 
     private void showForeground() {
@@ -160,8 +163,7 @@ public class CaptureService extends Service {
                 return;
             }
             captureAndUpload();
-            maybePollControlRequest();
-            maybeStopIfSessionEnded();
+            maybePollAssistState();
             worker.postDelayed(this, 520);
         }
     };
@@ -182,26 +184,18 @@ public class CaptureService extends Service {
         }, "capture-end-relay").start();
     }
 
-    private void maybePollControlRequest() {
+    private void maybePollAssistState() {
         long now = System.currentTimeMillis();
-        if (now - lastControlCheckMs < 1500) {
+        if (now - lastAssistStateCheckMs < 1500) {
             return;
         }
-        lastControlCheckMs = now;
-        AssistNotifier.pollControlRequest(this, baseUrl, pairCode, authToken);
-    }
-
-    private void maybeStopIfSessionEnded() {
-        long now = System.currentTimeMillis();
-        if (now - lastSessionCheckMs < 1500) {
-            return;
-        }
-        lastSessionCheckMs = now;
+        lastAssistStateCheckMs = now;
         try {
             String pair = URLEncoder.encode(pairCode, StandardCharsets.UTF_8.name());
             String token = URLEncoder.encode(authToken, StandardCharsets.UTF_8.name());
             JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + pair + "&authToken=" + token);
             JSONObject family = result.optJSONObject("family");
+            AssistNotifier.handleControlRequest(this, family);
             if (family != null && !family.optBoolean("active", false)) {
                 SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
                 prefs.edit()

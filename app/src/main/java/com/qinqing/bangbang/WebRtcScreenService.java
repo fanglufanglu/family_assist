@@ -44,6 +44,7 @@ public class WebRtcScreenService extends Service {
     private String authToken;
     private String sessionId;
     private long lastSessionCheckMs;
+    private volatile boolean assistStateCheckInFlight;
     private volatile boolean rtcConnected;
     private volatile boolean fallbackUploadInFlight;
     private long lastFallbackUploadMs;
@@ -105,7 +106,6 @@ public class WebRtcScreenService extends Service {
             if (!monitoring) {
                 return;
             }
-            monitorIo.execute(() -> AssistNotifier.pollControlRequest(WebRtcScreenService.this, baseUrl, pairCode, authToken));
             maybeStopIfSessionEnded();
             main.postDelayed(this, 1500);
         }
@@ -113,16 +113,18 @@ public class WebRtcScreenService extends Service {
 
     private void maybeStopIfSessionEnded() {
         long now = System.currentTimeMillis();
-        if (now - lastSessionCheckMs < 1500) {
+        if (assistStateCheckInFlight || now - lastSessionCheckMs < 1500) {
             return;
         }
         lastSessionCheckMs = now;
+        assistStateCheckInFlight = true;
         monitorIo.execute(() -> {
             try {
                 String pair = URLEncoder.encode(pairCode, StandardCharsets.UTF_8.name());
                 String token = URLEncoder.encode(authToken, StandardCharsets.UTF_8.name());
                 JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + pair + "&authToken=" + token);
                 JSONObject family = result.optJSONObject("family");
+                AssistNotifier.handleControlRequest(this, family);
                 if (family != null && !family.optBoolean("active", false)) {
                     SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
                     prefs.edit()
@@ -135,6 +137,8 @@ public class WebRtcScreenService extends Service {
                     stopSelf();
                 }
             } catch (Exception ignored) {
+            } finally {
+                assistStateCheckInFlight = false;
             }
         });
     }

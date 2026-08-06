@@ -81,6 +81,19 @@ async function run() {
   const approvedState = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
   assert(approvedState.body.controlAllowed && !approvedState.body.controlRequested, "approved control state should synchronize");
 
+  const annotation = await post("/api/annotation", {
+    pairCode,
+    authToken: first.body.authToken,
+    sessionId,
+    x: 0.42,
+    y: 0.37,
+    radius: 0.08,
+    label: "请点这里",
+  });
+  assert(annotation.status === 200 && annotation.body.annotation.id, "family annotation should be accepted for the active session");
+  const elderAnnotation = await get(`/api/annotation?pairCode=${pairCode}&authToken=${elderToken}`);
+  assert(elderAnnotation.body.annotation.id === annotation.body.annotation.id, "elder should receive the current annotation");
+
   const rightEnd = await post("/api/family/end", { pairCode, authToken: first.body.authToken, sessionId });
   assert(rightEnd.status === 200, "active relative should end the session");
   const endedState = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
@@ -89,6 +102,14 @@ async function run() {
   const nextHelp = await post("/api/help", { pairCode, authToken: elderToken, elderName: "妈妈" });
   assert(nextHelp.status === 200 && nextHelp.body.sessionId !== sessionId, "elder should start a fresh second session");
   await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
+  const staleAnnotation = await post("/api/annotation", {
+    pairCode,
+    authToken: first.body.authToken,
+    sessionId,
+    x: 0.5,
+    y: 0.5,
+  });
+  assert(staleAnnotation.status === 409, "an annotation from an old session must be rejected");
   const offer = await post("/api/webrtc/offer", {
     pairCode, authToken: elderToken, sessionId: nextHelp.body.sessionId, type: "offer", sdp: "offer-sdp",
   });

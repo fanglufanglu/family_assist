@@ -13,9 +13,6 @@ import android.os.Build;
 
 import org.json.JSONObject;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-
 final class AssistNotifier {
     private static final String PREFS = "family-assist";
     private static final String CHANNEL_CONTROL = "control_requests";
@@ -40,38 +37,29 @@ final class AssistNotifier {
         }
     }
 
-    static void pollControlRequest(Context context, String baseUrl, String pairCode, String authToken) {
-        if (baseUrl == null || pairCode == null || authToken == null
-                || baseUrl.isEmpty() || pairCode.isEmpty() || authToken.isEmpty()) {
+    static void handleControlRequest(Context context, JSONObject family) {
+        if (family == null || !family.optBoolean("controlRequested", false)) {
             return;
         }
-        try {
-            JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
-            JSONObject family = result.optJSONObject("family");
-            if (family == null || !family.optBoolean("controlRequested", false)) {
-                return;
-            }
-            String updatedAt = family.optString("controlUpdatedAt", "");
-            if (updatedAt.isEmpty()) {
-                return;
-            }
-            SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-            if (prefs.getBoolean("appForeground", false)
-                    && prefs.getBoolean("elderPageVisible", false)) {
-                return;
-            }
-            String notifiedAt = prefs.getString("notifiedControlRequestAt", "");
-            String handledAt = prefs.getString("handledControlRequestAt", "");
-            if (updatedAt.equals(notifiedAt) || updatedAt.equals(handledAt)) {
-                return;
-            }
-            prefs.edit()
-                    .putString("pendingControlRequestAt", updatedAt)
-                    .putString("notifiedControlRequestAt", updatedAt)
-                    .apply();
-            showControlRequestNotification(context);
-        } catch (Exception ignored) {
+        String updatedAt = family.optString("controlUpdatedAt", "");
+        if (updatedAt.isEmpty()) {
+            return;
         }
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (prefs.getBoolean("appForeground", false)
+                && prefs.getBoolean("elderPageVisible", false)) {
+            return;
+        }
+        String notifiedAt = prefs.getString("notifiedControlRequestAt", "");
+        String handledAt = prefs.getString("handledControlRequestAt", "");
+        if (updatedAt.equals(notifiedAt) || updatedAt.equals(handledAt)) {
+            return;
+        }
+        prefs.edit()
+                .putString("pendingControlRequestAt", updatedAt)
+                .putString("notifiedControlRequestAt", updatedAt)
+                .apply();
+        showControlRequestNotification(context);
     }
 
     private static void showControlRequestNotification(Context context) {
@@ -137,9 +125,5 @@ final class AssistNotifier {
         if (manager != null) {
             manager.cancel(NOTIFICATION_ASSIST_ENDED);
         }
-    }
-
-    private static String encoded(String value) throws Exception {
-        return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
     }
 }

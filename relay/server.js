@@ -727,7 +727,13 @@ const server = http.createServer(async (req, res) => {
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
       if (!requireActiveHelper(res, result, authToken)) return;
+      const sessionId = String(payload.sessionId || "").trim();
+      if (!sessionId || sessionId !== result.family.sessionId) {
+        sendJson(res, 409, { error: "stale session" });
+        return;
+      }
       result.family.annotation = {
+        id: crypto.randomBytes(8).toString("hex"),
         type: "circle",
         x: Number(payload.x || 0),
         y: Number(payload.y || 0),
@@ -735,7 +741,8 @@ const server = http.createServer(async (req, res) => {
         label: String(payload.label || "请点这里"),
         frameUpdatedAt: String(payload.frameUpdatedAt || ""),
         updatedAt: new Date().toISOString(),
-        expiresAt: Date.now() + 6500,
+        sessionId,
+        expiresAt: Date.now() + 8000,
       };
       sendJson(res, 200, { ok: true, annotation: result.family.annotation });
       return;
