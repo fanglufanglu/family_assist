@@ -13,6 +13,8 @@ import android.os.IBinder;
 
 import org.json.JSONObject;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -33,6 +35,7 @@ public class WebRtcScreenService extends Service {
     private String pairCode;
     private String authToken;
     private String sessionId;
+    private long lastSessionCheckMs;
 
     @Override
     public void onCreate() {
@@ -82,9 +85,30 @@ public class WebRtcScreenService extends Service {
                 return;
             }
             monitorIo.execute(() -> AssistNotifier.pollControlRequest(WebRtcScreenService.this, baseUrl, pairCode, authToken));
+            maybeStopIfSessionEnded();
             main.postDelayed(this, 1500);
         }
     };
+
+    private void maybeStopIfSessionEnded() {
+        long now = System.currentTimeMillis();
+        if (now - lastSessionCheckMs < 1500) {
+            return;
+        }
+        lastSessionCheckMs = now;
+        monitorIo.execute(() -> {
+            try {
+                String pair = URLEncoder.encode(pairCode, StandardCharsets.UTF_8.name());
+                String token = URLEncoder.encode(authToken, StandardCharsets.UTF_8.name());
+                JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + pair + "&authToken=" + token);
+                JSONObject family = result.optJSONObject("family");
+                if (family != null && !family.optBoolean("active", false)) {
+                    stopSelf();
+                }
+            } catch (Exception ignored) {
+            }
+        });
+    }
 
     private void showForeground(String text) {
         Notification notification = buildNotification(text);

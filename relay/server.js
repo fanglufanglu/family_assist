@@ -56,6 +56,7 @@ function familyFor(pairCode) {
       controlUpdatedAt: "",
       controlAction: null,
       audit: [],
+      crashes: [],
       webrtc: {
         offer: null,
         answer: null,
@@ -138,6 +139,21 @@ function audit(family, type, detail) {
   }
 }
 
+function rememberCrash(family, payload, member) {
+  family.crashes.push({
+    id: crypto.randomBytes(8).toString("hex"),
+    role: member ? member.role : String(payload.role || ""),
+    message: String(payload.message || ""),
+    stack: String(payload.stack || "").slice(0, 8000),
+    device: String(payload.device || ""),
+    appVersion: String(payload.appVersion || ""),
+    createdAt: new Date().toISOString(),
+  });
+  if (family.crashes.length > 50) {
+    family.crashes.splice(0, family.crashes.length - 50);
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const startedAt = Date.now();
   res.on("finish", () => logRequest(req, res, startedAt));
@@ -176,6 +192,7 @@ const server = http.createServer(async (req, res) => {
       family.controlAllowed = false;
       family.controlAction = null;
       family.audit = [];
+      family.crashes = [];
       family.frame = null;
       family.frameUpdatedAt = "";
       family.lastFamilySeenAtMs = 0;
@@ -294,6 +311,29 @@ const server = http.createServer(async (req, res) => {
       result.family.updatedAt = new Date().toISOString();
       audit(result.family, "help_ended", { sessionId });
       sendJson(res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/family/end") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken, "family");
+      if (!result) return;
+      const sessionId = String(payload.sessionId || "").trim();
+      if (sessionId && result.family.sessionId && sessionId !== result.family.sessionId) {
+        sendJson(res, 200, { ok: true, stale: true });
+        return;
+      }
+      result.family.active = false;
+      result.family.sessionId = "";
+      result.family.annotation = null;
+      result.family.controlAllowed = false;
+      result.family.controlRequested = false;
+      result.family.controlAction = null;
+      result.family.updatedAt = new Date().toISOString();
+      audit(result.family, "family_left", { sessionId, by: result.member.name });
+      sendJson(res, 200, { ok: true, family: publicFamily(result.family) });
       return;
     }
 
@@ -601,6 +641,18 @@ const server = http.createServer(async (req, res) => {
       const result = requireMember(res, pairCode, authToken);
       if (!result) return;
       sendJson(res, 200, { ok: true, audit: result.family.audit.slice(-50) });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/crash") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken);
+      if (!result) return;
+      rememberCrash(result.family, payload, result.member);
+      audit(result.family, "crash_reported", { role: result.member.role, message: String(payload.message || "").slice(0, 180) });
+      sendJson(res, 200, { ok: true });
       return;
     }
 

@@ -54,6 +54,7 @@ public class CaptureService extends Service {
     private String authToken;
     private String sessionId;
     private long lastControlCheckMs;
+    private long lastSessionCheckMs;
     private boolean destroyed;
 
     @Override
@@ -160,6 +161,7 @@ public class CaptureService extends Service {
             }
             captureAndUpload();
             maybePollControlRequest();
+            maybeStopIfSessionEnded();
             worker.postDelayed(this, 520);
         }
     };
@@ -187,6 +189,24 @@ public class CaptureService extends Service {
         }
         lastControlCheckMs = now;
         AssistNotifier.pollControlRequest(this, baseUrl, pairCode, authToken);
+    }
+
+    private void maybeStopIfSessionEnded() {
+        long now = System.currentTimeMillis();
+        if (now - lastSessionCheckMs < 1500) {
+            return;
+        }
+        lastSessionCheckMs = now;
+        try {
+            String pair = URLEncoder.encode(pairCode, StandardCharsets.UTF_8.name());
+            String token = URLEncoder.encode(authToken, StandardCharsets.UTF_8.name());
+            JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + pair + "&authToken=" + token);
+            JSONObject family = result.optJSONObject("family");
+            if (family != null && !family.optBoolean("active", false)) {
+                stopSelf();
+            }
+        } catch (Exception ignored) {
+        }
     }
 
     private void captureAndUpload() {

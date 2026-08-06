@@ -223,6 +223,7 @@ public class MainActivity extends Activity {
         safetyCard.addView(settingsButton);
         root.addView(safetyCard);
         root.addView(status);
+        root.addView(bottomNav("home"));
         setContentView(scroll(root));
     }
 
@@ -274,6 +275,7 @@ public class MainActivity extends Activity {
         root.addView(connectionCard);
         root.addView(status);
         root.addView(backButton);
+        root.addView(bottomNav("settings"));
         setContentView(scroll(root));
     }
 
@@ -312,6 +314,7 @@ public class MainActivity extends Activity {
             root.addView(bindCard);
             root.addView(status);
             root.addView(backButton);
+            root.addView(bottomNav("elder"));
             setContentView(scroll(root));
             return;
         }
@@ -350,6 +353,7 @@ public class MainActivity extends Activity {
         if (!assisting) {
             root.addView(backButton);
         }
+        root.addView(bottomNav("elder"));
         setContentView(scroll(root));
         pollElderAnnotationLoop();
     }
@@ -384,6 +388,7 @@ public class MainActivity extends Activity {
         root.addView(bindCard);
         root.addView(status);
         root.addView(backButton);
+        root.addView(bottomNav("elder"));
         setContentView(scroll(root));
         pollElderBindLoop();
     }
@@ -435,6 +440,28 @@ public class MainActivity extends Activity {
         root.addView(safetyCard);
         root.addView(status);
         root.addView(backButton);
+        root.addView(bottomNav("settings"));
+        setContentView(scroll(root));
+    }
+
+    private void showPrivacyPolicy() {
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        elderBindPolling = false;
+        root = verticalRoot();
+        root.addView(hero("隐私政策", "屏幕协助前，请先了解这些边界"));
+
+        LinearLayout summary = card("我们会处理哪些信息", "亲属绑定信息、协助会话状态、长辈主动授权后的屏幕画面、远程点击授权和操作审计。屏幕内容仅用于本次亲属协助。");
+        root.addView(summary);
+        root.addView(card("权限用途", "屏幕录制用于共享画面；显示在其他应用上层用于画圈提示；无障碍服务用于敏感页面保护和长辈授权后的远程点击；通知用于提醒长辈处理授权请求。"));
+        root.addView(card("安全边界", "未绑定不能查看屏幕；长辈不主动发起不能查看屏幕；长辈未授权不能远程点击；协助结束后远程点击会自动关闭。"));
+        root.addView(card("数据保留", "当前 MVP relay 以内存保存协助状态，服务重启后清空。正式版本建议屏幕画面默认不落盘，审计记录保留 90 天。"));
+        root.addView(card("联系我们", "正式上架前需要补充开发者主体、客服邮箱、隐私政策网址和注销方式。"));
+
+        Button backButton = primaryButton("返回首页");
+        backButton.setOnClickListener(v -> showSetup());
+        root.addView(backButton);
+        root.addView(bottomNav("privacy"));
         setContentView(scroll(root));
     }
 
@@ -485,6 +512,7 @@ public class MainActivity extends Activity {
         root.addView(endButton);
         root.addView(refreshButton);
         root.addView(backButton);
+        root.addView(bottomNav("family"));
         setContentView(scroll(root));
         pollFamilyLoop();
     }
@@ -629,6 +657,7 @@ public class MainActivity extends Activity {
         root.addView(bindCard);
         root.addView(status);
         root.addView(backButton);
+        root.addView(bottomNav("family"));
         setContentView(scroll(root));
     }
 
@@ -649,10 +678,6 @@ public class MainActivity extends Activity {
         captureRequestInProgress = true;
         setStatus("正在打开屏幕共享授权...");
         requestScreenCapturePermission();
-    }
-
-    private void publishHelpRequest() {
-        publishHelpRequest(null);
     }
 
     private void publishHelpRequest(Runnable afterSuccess) {
@@ -844,12 +869,15 @@ public class MainActivity extends Activity {
             if (!familyPolling || !isWebRtcEnabled() || rtcVideoReady || !expectedSessionId.equals(familyLastSessionId)) {
                 return;
             }
+            prefs.edit().putBoolean("webRtcEnabled", false).apply();
             stopFamilyWebRtc();
-            setStatus("实时画面暂时未连上。已断开本次实时连接，请让长辈点“重新发起协助”后会自动重连。");
+            showFamily();
+            setStatus("实时画面暂时未连上，已自动切到稳定屏幕模式。可在连接设置里重新打开实时模式。");
         }, 8000);
     }
 
     private void endFamilyAssistView() {
+        String sessionId = familyLastSessionId;
         familyLastActive = false;
         familyLastSessionId = "";
         familyControlAllowed = false;
@@ -858,6 +886,16 @@ public class MainActivity extends Activity {
         stopFamilyWebRtc();
         clearFamilyScreen();
         setStatus("已退出本次协助。长辈再次发起后会自动连接。");
+        statusIo.execute(() -> {
+            try {
+                NetworkClient.postJson(baseUrl, "/api/family/end", new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken)
+                        .put("sessionId", sessionId));
+            } catch (Exception e) {
+                main.post(() -> setStatus("本地已退出；同步给长辈失败：" + friendlyError(e)));
+            }
+        });
     }
 
     private void clearFamilyScreen() {
@@ -885,6 +923,7 @@ public class MainActivity extends Activity {
                 String token = encoded(authToken);
                 JSONObject help = NetworkClient.getJson(baseUrl, "/api/help?pairCode=" + encoded + "&authToken=" + token);
                 boolean active = help.optBoolean("active", false);
+                boolean wasActive = familyLastActive || !familyLastSessionId.isEmpty();
                 familyLastActive = active;
                 familyControlAllowed = help.optBoolean("controlAllowed", false);
                 if (!active) {
@@ -892,7 +931,7 @@ public class MainActivity extends Activity {
                         familyLastSessionId = "";
                         stopFamilyWebRtc();
                         clearFamilyScreen();
-                        setStatus("正在等待协助请求...");
+                        setStatus(wasActive ? "对方已结束协助。等待长辈下一次发起。" : "正在等待协助请求...");
                     });
                     return;
                 }
@@ -1590,14 +1629,33 @@ public class MainActivity extends Activity {
 
     private void openAccessibilityServiceSettings() {
         ComponentName componentName = new ComponentName(this, SensitiveAccessibilityService.class);
-        Intent detailIntent = new Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS");
+        Intent detailIntent = new Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
+                .setData(Uri.parse("package:" + getPackageName()));
         detailIntent.putExtra("android.provider.extra.ACCESSIBILITY_SERVICE_COMPONENT_NAME", componentName.flattenToString());
+        detailIntent.putExtra("android.intent.extra.COMPONENT_NAME", componentName.flattenToString());
         try {
             startActivity(detailIntent);
+            setStatus("已尝试直接打开“亲情帮帮”辅助服务开关页。打开开关后按返回键。");
         } catch (Exception ignored) {
-            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-            setStatus("请在列表里点“亲情帮帮”，打开开关后按返回键。");
+            Intent fallback = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(fallback);
+            setStatus(accessibilityListFallbackText());
         }
+    }
+
+    private String accessibilityListFallbackText() {
+        String brand = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase();
+        if (brand.contains("vivo")) {
+            return "系统没有开放直达开关页。请点“亲情帮帮”，打开开关后按返回键。";
+        }
+        if (brand.contains("oppo") || brand.contains("realme") || brand.contains("oneplus")) {
+            return "系统没有开放直达开关页。请进入“已下载的应用/已安装服务”，点“亲情帮帮”并开启。";
+        }
+        if (brand.contains("xiaomi") || brand.contains("redmi")) {
+            return "系统没有开放直达开关页。请进入“已下载的应用”，点“亲情帮帮”并开启。";
+        }
+        return "系统没有开放直达开关页。请在列表里点“亲情帮帮”，打开开关后按返回键。";
     }
 
     private String migrateRelayUrl(String value) {
@@ -1833,6 +1891,30 @@ public class MainActivity extends Activity {
         row.setGravity(Gravity.CENTER);
         row.setLayoutParams(fullWidthParams());
         return row;
+    }
+
+    private LinearLayout bottomNav(String current) {
+        LinearLayout nav = horizontalRow();
+        nav.setPadding(0, dp(8), 0, dp(8));
+        nav.setBackground(rounded(0xFFFFFFFF, dp(18), COLOR_LINE));
+        LinearLayout.LayoutParams params = fullWidthParams();
+        params.setMargins(0, dp(8), 0, dp(10));
+        nav.setLayoutParams(params);
+        addNavButton(nav, "首页", "home".equals(current), v -> showSetup());
+        addNavButton(nav, "长辈", "elder".equals(current), v -> showElder());
+        addNavButton(nav, "家属", "family".equals(current), v -> showFamily());
+        addNavButton(nav, "隐私", "privacy".equals(current), v -> showPrivacyPolicy());
+        return nav;
+    }
+
+    private void addNavButton(LinearLayout row, String text, boolean selected, View.OnClickListener listener) {
+        Button button = selected ? primaryButton(text) : secondaryButton(text);
+        button.setTextSize(14);
+        button.setMinHeight(dp(44));
+        button.setOnClickListener(listener);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        params.setMargins(dp(4), 0, dp(4), 0);
+        row.addView(button, params);
     }
 
     private void addControlButton(LinearLayout row, Button button) {
