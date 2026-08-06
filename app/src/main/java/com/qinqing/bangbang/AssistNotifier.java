@@ -9,13 +9,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.media.RingtoneManager;
 import android.os.Build;
 
 import org.json.JSONObject;
 
 final class AssistNotifier {
     private static final String PREFS = "family-assist";
-    private static final String CHANNEL_CONTROL = "control_requests";
+    static final String CHANNEL_URGENT = "assist_urgent_v2";
     private static final int NOTIFICATION_CONTROL_REQUEST = 3001;
     private static final int NOTIFICATION_ASSIST_ENDED = 3002;
 
@@ -27,9 +28,19 @@ final class AssistNotifier {
             return;
         }
         NotificationChannel channel = new NotificationChannel(
-                CHANNEL_CONTROL,
-                "协助提醒",
+                CHANNEL_URGENT,
+                "重要协助提醒",
                 NotificationManager.IMPORTANCE_HIGH
+        );
+        channel.setDescription("远程操作授权和协助结束提醒");
+        channel.enableVibration(true);
+        channel.setVibrationPattern(new long[]{0, 350, 180, 350});
+        channel.enableLights(true);
+        channel.setLightColor(0xFF2563EB);
+        channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+        channel.setSound(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
+                Notification.AUDIO_ATTRIBUTES_DEFAULT
         );
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) {
@@ -62,7 +73,7 @@ final class AssistNotifier {
         showControlRequestNotification(context);
     }
 
-    private static void showControlRequestNotification(Context context) {
+    static void showControlRequestNotification(Context context) {
         if (Build.VERSION.SDK_INT >= 33
                 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             return;
@@ -76,7 +87,7 @@ final class AssistNotifier {
                 Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE : PendingIntent.FLAG_UPDATE_CURRENT
         );
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
-                ? new Notification.Builder(context, CHANNEL_CONTROL)
+                ? new Notification.Builder(context, CHANNEL_URGENT)
                 : new Notification.Builder(context);
         Notification notification = builder
                 .setContentTitle("家属请求远程点击")
@@ -86,6 +97,8 @@ final class AssistNotifier {
                 .setCategory(Notification.CATEGORY_CALL)
                 .setPriority(Notification.PRIORITY_HIGH)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setDefaults(Notification.DEFAULT_ALL)
+                .setOnlyAlertOnce(true)
                 .setAutoCancel(true)
                 .build();
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -108,7 +121,7 @@ final class AssistNotifier {
                 Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE : PendingIntent.FLAG_UPDATE_CURRENT
         );
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
-                ? new Notification.Builder(context, CHANNEL_CONTROL)
+                ? new Notification.Builder(context, CHANNEL_URGENT)
                 : new Notification.Builder(context);
         Notification notification = builder
                 .setContentTitle("家人已结束本次协助")
@@ -118,6 +131,8 @@ final class AssistNotifier {
                 .setCategory(Notification.CATEGORY_STATUS)
                 .setPriority(Notification.PRIORITY_HIGH)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setDefaults(Notification.DEFAULT_ALL)
+                .setOnlyAlertOnce(true)
                 .setAutoCancel(true)
                 .build();
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);

@@ -7,6 +7,8 @@ import android.content.pm.PackageManager;
 import android.media.projection.MediaProjection;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.DisplayMetrics;
+import android.view.WindowManager;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -204,7 +206,18 @@ final class WebRtcClient {
         SurfaceTextureHelper textureHelper = SurfaceTextureHelper.create("screen-capture", eglBase.getEglBaseContext());
         videoSource = factory.createVideoSource(capturer.isScreencast());
         capturer.initialize(textureHelper, context, videoSource.getCapturerObserver());
-        capturer.startCapture(540, 960, 18);
+        DisplayMetrics metrics = new DisplayMetrics();
+        WindowManager windowManager = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        if (windowManager != null) {
+            windowManager.getDefaultDisplay().getRealMetrics(metrics);
+        }
+        int sourceWidth = Math.max(1, metrics.widthPixels);
+        int sourceHeight = Math.max(1, metrics.heightPixels);
+        int longEdge = 960;
+        float scale = longEdge / (float) Math.max(sourceWidth, sourceHeight);
+        int captureWidth = evenDimension(Math.round(sourceWidth * scale));
+        int captureHeight = evenDimension(Math.round(sourceHeight * scale));
+        capturer.startCapture(captureWidth, captureHeight, 18);
         VideoTrack videoTrack = factory.createVideoTrack("elder-screen", videoSource);
         videoTrack.addSink(frame -> {
             if (listener != null && running) {
@@ -212,6 +225,11 @@ final class WebRtcClient {
             }
         });
         peerConnection.addTrack(videoTrack, Collections.singletonList("assist"));
+    }
+
+    private int evenDimension(int value) {
+        int safe = Math.max(2, value);
+        return safe % 2 == 0 ? safe : safe - 1;
     }
 
     private void createOffer() {

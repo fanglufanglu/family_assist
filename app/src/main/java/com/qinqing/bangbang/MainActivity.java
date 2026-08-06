@@ -3,9 +3,7 @@ package com.qinqing.bangbang;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.NotificationChannel;
 import android.app.NotificationManager;
-import android.app.PendingIntent;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -13,6 +11,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Bitmap;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -30,6 +29,7 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
@@ -37,8 +37,6 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import org.json.JSONObject;
-import org.webrtc.RendererCommon;
-import org.webrtc.SurfaceViewRenderer;
 import org.webrtc.VideoFrame;
 import org.webrtc.VideoTrack;
 
@@ -51,9 +49,9 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_CAPTURE = 2001;
+    private static final int REQUEST_NOTIFICATIONS = 2002;
     private static final int NOTIFICATION_CONTROL_REQUEST = 3001;
     private static final String PREFS = "family-assist";
-    private static final String CHANNEL_CONTROL = "control_requests";
     private static final String DEFAULT_RELAY_URL = "https://super-duper-funicular-44776x6g7hjvwj-8787.app.github.dev";
     private static final String DEFAULT_PAIR_CODE = "family001";
     private static final long FRESH_FRAME_MS = 2500;
@@ -64,7 +62,7 @@ public class MainActivity extends Activity {
     private static final long ACTION_BUTTON_RESET_MS = 1800;
     private static final long ANNOTATION_THROTTLE_MS = 850;
     private static final long RTC_STALE_FRAME_MS = 3200;
-    private static final long RTC_FRAME_SAMPLE_MS = 850;
+    private static final long RTC_FRAME_SAMPLE_MS = 180;
     private static final String PREF_ASSIST_SESSION_ID = "assistSessionId";
 
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -113,7 +111,6 @@ public class MainActivity extends Activity {
     private String deviceId;
     private TextView status;
     private ImageView frameView;
-    private SurfaceViewRenderer rtcView;
     private WebRtcClient familyRtcClient;
     private boolean familyPolling;
     private boolean elderAnnotationPolling;
@@ -128,10 +125,11 @@ public class MainActivity extends Activity {
     private boolean elderStatusInFlight;
     private boolean familyControlAllowed;
     private Button familyControlRequestButton;
+    private Button familyRemoteButton;
     private Button familyEndButton;
-    private LinearLayout familyRemotePanel;
+    private LinearLayout familyActionBar;
     private TextView familyScreenLabelView;
-    private LinearLayout familyScreenSurface;
+    private FrameLayout familyScreenSurface;
     private LinearLayout familyWaitingView;
     private TextView familyWaitingTitle;
     private TextView familyWaitingCaption;
@@ -139,16 +137,14 @@ public class MainActivity extends Activity {
     private volatile boolean rtcVideoReady;
     private boolean rtcTrackAttached;
     private boolean familyMediaReady;
-    private boolean rtcLiveDisplayed;
-    private int rtcFrameWidth;
-    private int rtcFrameHeight;
-    private int rtcFrameRotation;
     private boolean assistEndPromptShowing;
     private boolean familyLastActive;
     private boolean elderInviteBoundShown;
     private String familyLastSessionId = "";
     private String currentPage = "home";
     private boolean captureRequestInProgress;
+    private boolean resumeCaptureAfterNotificationPermission;
+    private boolean resumeCaptureAfterNotificationSettings;
     private boolean inviteInProgress;
     private boolean bindInProgress;
     private boolean remoteRequestInProgress;
@@ -239,6 +235,10 @@ public class MainActivity extends Activity {
             refreshElderOnResume = false;
             main.postDelayed(this::showElder, 200);
         }
+        if (resumeCaptureAfterNotificationSettings && areAssistNotificationsEnabled()) {
+            resumeCaptureAfterNotificationSettings = false;
+            main.postDelayed(this::requestHelpAndCapture, 250);
+        }
     }
 
     @Override
@@ -290,6 +290,23 @@ public class MainActivity extends Activity {
             endHelpRequest();
             showElder();
             setStatus("你取消了屏幕共享授权。");
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQUEST_NOTIFICATIONS) {
+            return;
+        }
+        boolean continueCapture = resumeCaptureAfterNotificationPermission;
+        resumeCaptureAfterNotificationPermission = false;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (continueCapture) {
+                requestHelpAndCapture();
+            }
+        } else {
+            showNotificationPermissionDialog();
         }
     }
 
@@ -630,7 +647,6 @@ public class MainActivity extends Activity {
         rtcVideoReady = false;
         rtcTrackAttached = false;
         familyMediaReady = false;
-        rtcLiveDisplayed = false;
         lastRtcFrameAtMs = 0;
         lastRtcSampleAtMs = 0;
         rtcBlackSamples = 0;
@@ -640,13 +656,15 @@ public class MainActivity extends Activity {
         root.addView(hero("家属协助", "查看长辈屏幕，提供提示与操作"));
         status = stableNotice("连接正常");
         boolean useWebRtc = isWebRtcEnabled();
-        View screenView = useWebRtc ? buildRtcView() : buildFrameView();
+        View screenView = buildFrameView();
 
         familyControlRequestButton = secondaryButton("请求远程操作授权");
+        familyRemoteButton = secondaryButton("远程操作");
         familyEndButton = dangerButton("结束本次协助");
         familyChangeBindingButton = secondaryButton("绑定其他长辈");
         Button refreshButton = primaryButton("立即刷新");
         familyControlRequestButton.setOnClickListener(v -> requestRemoteControl(familyControlRequestButton));
+        familyRemoteButton.setOnClickListener(v -> showRemoteControlPanel());
         familyEndButton.setOnClickListener(v -> endFamilyAssistView());
         familyChangeBindingButton.setOnClickListener(v -> confirmChangeFamilyBinding());
         refreshButton.setOnClickListener(v -> {
@@ -666,17 +684,12 @@ public class MainActivity extends Activity {
         root.addView(familyWaitingView);
         root.addView(familyScreenLabelView);
         root.addView(familyScreenSurface);
-        familyRemotePanel = buildRemoteControlPanel();
+        familyActionBar = buildFamilyActionBar();
         setFamilySessionActive(false);
-        root.addView(familyControlRequestButton);
-        root.addView(familyRemotePanel);
-        root.addView(familyEndButton);
-        root.addView(familyChangeBindingButton);
         if (!useWebRtc) {
-            root.addView(refreshButton);
+            refreshButton.setVisibility(View.GONE);
         }
-        root.addView(bottomNav("family"));
-        setContentView(scroll(root));
+        setContentView(familyPage(root, familyActionBar, bottomNav("family")));
         startFamilyPollLoop();
     }
 
@@ -719,49 +732,11 @@ public class MainActivity extends Activity {
         return frameView;
     }
 
-    private View buildRtcView() {
-        rtcView = new SurfaceViewRenderer(this);
-        rtcView.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT);
-        rtcView.setMirror(false);
-        rtcView.setEnableHardwareScaler(true);
-        rtcView.setBackgroundColor(0xFF0F172A);
-        rtcView.setMinimumHeight(dp(500));
-        rtcView.setLayoutParams(new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(540)
-        ));
-        rtcView.setOnTouchListener((view, event) -> {
-            if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                view.getParent().requestDisallowInterceptTouchEvent(true);
-                screenTouchStartX = event.getX();
-                screenTouchStartY = event.getY();
-                screenTouchStartAtMs = System.currentTimeMillis();
-                return true;
-            }
-            if (event.getAction() == MotionEvent.ACTION_UP) {
-                if (!rtcVideoReady) {
-                    setStatus("实时画面正在连接，请等画面出现后再点。");
-                    return true;
-                }
-                if (familyControlAllowed) {
-                    handleRemoteTouchOnView(view, event.getX(), event.getY());
-                } else {
-                    float[] point = normalizedRtcPoint(view, event.getX(), event.getY());
-                    if (point == null) {
-                        setStatus("请点击屏幕画面内的内容区域");
-                    } else {
-                        sendAnnotation(point[0], point[1]);
-                    }
-                }
-                return true;
-            }
-            return true;
-        });
-        return rtcView;
-    }
-
     private LinearLayout buildRemoteControlPanel() {
-        LinearLayout panel = card("远程操作", "长辈同意后可点击或滑动；快捷按钮用于返回、主页和常用滑动。");
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(18), dp(6), dp(18), dp(8));
+        panel.addView(caption("点击画面可直接操作；也可以使用下面的快捷操作。"));
 
         Button homeButton = secondaryButton("主页");
         Button backButton = secondaryButton("返回");
@@ -790,6 +765,57 @@ public class MainActivity extends Activity {
         panel.addView(row2);
         panel.addView(row3);
         return panel;
+    }
+
+    private void showRemoteControlPanel() {
+        if (!familyControlAllowed) {
+            setStatus("长辈同意后才能使用远程操作。");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("远程操作")
+                .setView(buildRemoteControlPanel())
+                .setNegativeButton("关闭", null)
+                .show();
+    }
+
+    private LinearLayout buildFamilyActionBar() {
+        LinearLayout bar = horizontalRow();
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(10), dp(6), dp(10), dp(6));
+        bar.setBackground(rounded(0xFFFFFFFF, 0, COLOR_LINE));
+        addFamilyAction(bar, familyControlRequestButton);
+        addFamilyAction(bar, familyRemoteButton);
+        addFamilyAction(bar, familyEndButton);
+        addFamilyAction(bar, familyChangeBindingButton);
+        familyRemoteButton.setVisibility(View.GONE);
+        return bar;
+    }
+
+    private void addFamilyAction(LinearLayout row, Button button) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(50), 1f);
+        params.setMargins(dp(4), 0, dp(4), 0);
+        button.setMinHeight(0);
+        button.setTextSize(15);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        row.addView(button, params);
+    }
+
+    private View familyPage(View content, View actionBar, View nav) {
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setBackgroundColor(COLOR_BG);
+        page.addView(content, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
+        page.addView(actionBar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(62)
+        ));
+        page.addView(nav);
+        return page;
     }
 
     private void showFamilyBind() {
@@ -886,8 +912,9 @@ public class MainActivity extends Activity {
         if (!ensureBound("长辈")) {
             return;
         }
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 100);
+        if (!areAssistNotificationsEnabled()) {
+            requestAssistNotificationPermission();
+            return;
         }
         if (!ensureOverlayReady()) {
             return;
@@ -895,6 +922,43 @@ public class MainActivity extends Activity {
         captureRequestInProgress = true;
         setStatus("正在打开屏幕共享授权...");
         requestScreenCapturePermission();
+    }
+
+    private boolean areAssistNotificationsEnabled() {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        return manager == null || manager.areNotificationsEnabled();
+    }
+
+    private void requestAssistNotificationPermission() {
+        resumeCaptureAfterNotificationPermission = true;
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                && !prefs.getBoolean("notificationPermissionRequested", false)) {
+            prefs.edit().putBoolean("notificationPermissionRequested", true).apply();
+            setStatus("请允许通知提醒，家人在后台发来请求时才能及时看到。");
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATIONS);
+            return;
+        }
+        showNotificationPermissionDialog();
+    }
+
+    private void showNotificationPermissionDialog() {
+        resumeCaptureAfterNotificationPermission = false;
+        new AlertDialog.Builder(this)
+                .setTitle("请开启协助提醒")
+                .setMessage("开启后，即使正在使用其他应用，也能收到家人的操作请求和结束提醒。")
+                .setPositiveButton("去开启", (dialog, which) -> {
+                    resumeCaptureAfterNotificationSettings = true;
+                    Intent intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+                    startActivity(intent);
+                })
+                .setNegativeButton("暂不求助", null)
+                .show();
     }
 
     private void publishHelpRequest(Runnable afterSuccess) {
@@ -1100,13 +1164,6 @@ public class MainActivity extends Activity {
         if (familyRtcClient != null) {
             stopFamilyWebRtc();
         }
-        if (rtcView == null && familyScreenSurface != null) {
-            familyScreenSurface.removeAllViews();
-            familyScreenSurface.addView(buildRtcView(), new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.MATCH_PARENT
-            ));
-        }
         final String rtcSessionId = familyLastSessionId;
         familyRtcClient = new WebRtcClient(this, baseUrl, pairCode, authToken, rtcSessionId, new WebRtcClient.Listener() {
             @Override
@@ -1131,9 +1188,6 @@ public class MainActivity extends Activity {
                     return;
                 }
                 rtcTrackAttached = true;
-                if (rtcView != null) {
-                    track.addSink(rtcView);
-                }
                 track.addSink(frame -> monitorRemoteRtcFrame(frame, rtcSessionId));
             }
 
@@ -1141,30 +1195,6 @@ public class MainActivity extends Activity {
             public void onLocalVideoFrame(org.webrtc.VideoFrame frame) {
             }
         });
-        if (rtcView != null) {
-            rtcView.init(familyRtcClient.eglContext(), new RendererCommon.RendererEvents() {
-                @Override
-                public void onFirstFrameRendered() {
-                    main.post(() -> {
-                        if (!rtcSessionId.equals(familyLastSessionId) || !familyLastActive || rtcView == null) {
-                            return;
-                        }
-                        rtcVideoReady = true;
-                        lastRtcFrameAtMs = System.currentTimeMillis();
-                        showFamilyMedia(rtcView, "实时画面已连接");
-                    });
-                }
-
-                @Override
-                public void onFrameResolutionChanged(int width, int height, int rotation) {
-                    main.post(() -> {
-                        rtcFrameWidth = width;
-                        rtcFrameHeight = height;
-                        rtcFrameRotation = rotation;
-                    });
-                }
-            });
-        }
         familyRtcClient.startFamily();
     }
 
@@ -1173,20 +1203,12 @@ public class MainActivity extends Activity {
             familyRtcClient.stop();
             familyRtcClient = null;
         }
-        if (rtcView != null) {
-            rtcView.release();
-            rtcView = null;
-        }
         rtcVideoReady = false;
         rtcTrackAttached = false;
-        rtcLiveDisplayed = false;
         lastRtcFrameAtMs = 0;
         lastRtcSampleAtMs = 0;
         rtcBlackSamples = 0;
         rtcFrameAnalysisInFlight = false;
-        rtcFrameWidth = 0;
-        rtcFrameHeight = 0;
-        rtcFrameRotation = 0;
     }
 
     private void monitorRemoteRtcFrame(VideoFrame frame, String expectedSessionId) {
@@ -1203,9 +1225,11 @@ public class MainActivity extends Activity {
             try {
                 buffer = frame.getBuffer().toI420();
                 boolean black = isMostlyBlackFrame(buffer);
+                Bitmap bitmap = black ? null : i420ToBitmap(buffer);
                 rtcBlackSamples = black ? rtcBlackSamples + 1 : 0;
                 main.post(() -> {
                     if (!expectedSessionId.equals(familyLastSessionId) || !familyLastActive) {
+                        if (bitmap != null) bitmap.recycle();
                         return;
                     }
                     if (rtcBlackSamples >= 2) {
@@ -1214,12 +1238,18 @@ public class MainActivity extends Activity {
                             setStatus("实时画面暂时不可用，已切换备用画面");
                         }
                         pollFamilyOnce();
-                    } else if (!black) {
-                        boolean recovered = !rtcVideoReady;
-                        rtcVideoReady = true;
-                        if (recovered || !rtcLiveDisplayed) {
-                            showFamilyMedia(rtcView, "实时画面已连接");
+                    } else if (!black && bitmap != null && frameView != null) {
+                        lastFrameReceivedAtMs = System.currentTimeMillis();
+                        Drawable previous = frameView.getDrawable();
+                        frameView.setImageBitmap(bitmap);
+                        if (previous instanceof BitmapDrawable) {
+                            Bitmap oldBitmap = ((BitmapDrawable) previous).getBitmap();
+                            if (oldBitmap != bitmap && !oldBitmap.isRecycled()) {
+                                oldBitmap.recycle();
+                            }
                         }
+                        rtcVideoReady = true;
+                        showFamilyMedia(frameView, "实时画面已连接");
                     }
                 });
             } catch (Exception ignored) {
@@ -1229,6 +1259,35 @@ public class MainActivity extends Activity {
                 rtcFrameAnalysisInFlight = false;
             }
         });
+    }
+
+    private Bitmap i420ToBitmap(VideoFrame.I420Buffer buffer) {
+        int width = buffer.getWidth();
+        int height = buffer.getHeight();
+        int[] pixels = new int[width * height];
+        ByteBuffer yPlane = buffer.getDataY();
+        ByteBuffer uPlane = buffer.getDataU();
+        ByteBuffer vPlane = buffer.getDataV();
+        int yStride = buffer.getStrideY();
+        int uStride = buffer.getStrideU();
+        int vStride = buffer.getStrideV();
+        for (int row = 0; row < height; row++) {
+            int chromaRow = row / 2;
+            for (int col = 0; col < width; col++) {
+                int y = yPlane.get(row * yStride + col) & 0xFF;
+                int u = (uPlane.get(chromaRow * uStride + col / 2) & 0xFF) - 128;
+                int v = (vPlane.get(chromaRow * vStride + col / 2) & 0xFF) - 128;
+                int r = clampColor(Math.round(y + 1.402f * v));
+                int g = clampColor(Math.round(y - 0.344136f * u - 0.714136f * v));
+                int b = clampColor(Math.round(y + 1.772f * u));
+                pixels[row * width + col] = Color.rgb(r, g, b);
+            }
+        }
+        return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888);
+    }
+
+    private int clampColor(int value) {
+        return Math.max(0, Math.min(255, value));
     }
 
     private boolean isMostlyBlackFrame(VideoFrame.I420Buffer buffer) {
@@ -1310,10 +1369,9 @@ public class MainActivity extends Activity {
     }
 
     private void setFamilySessionActionsVisible(boolean visible) {
-        int value = visible ? View.VISIBLE : View.GONE;
-        if (familyControlRequestButton != null) familyControlRequestButton.setVisibility(value);
-        if (familyEndButton != null) familyEndButton.setVisibility(value);
-        if (familyRemotePanel != null) familyRemotePanel.setVisibility(value);
+        if (familyEndButton != null) familyEndButton.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if (familyControlRequestButton != null) familyControlRequestButton.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if (familyRemoteButton != null) familyRemoteButton.setVisibility(View.GONE);
     }
 
     private void setFamilySessionActive(boolean active) {
@@ -1330,7 +1388,7 @@ public class MainActivity extends Activity {
         }
         if (familyWaitingView != null) familyWaitingView.setVisibility(active && familyMediaReady ? View.GONE : View.VISIBLE);
         if (familyScreenLabelView != null) familyScreenLabelView.setVisibility(active && familyMediaReady ? View.VISIBLE : View.GONE);
-        if (familyScreenSurface != null) familyScreenSurface.setVisibility(active ? View.VISIBLE : View.GONE);
+        if (familyScreenSurface != null) familyScreenSurface.setVisibility(active && familyMediaReady ? View.VISIBLE : View.GONE);
         if (familyChangeBindingButton != null) familyChangeBindingButton.setVisibility(active ? View.GONE : View.VISIBLE);
         setFamilySessionActionsVisible(active);
     }
@@ -1345,24 +1403,18 @@ public class MainActivity extends Activity {
             return;
         }
         familyMediaReady = true;
-        rtcLiveDisplayed = mediaView == rtcView;
-        familyScreenSurface.removeAllViews();
         resizeFamilyScreenSurface(dp(500));
-        if (isWebRtcEnabled() && mediaView == frameView && rtcView != null) {
-            familyScreenSurface.addView(rtcView, new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    dp(2)
+        if (frameView != null && frameView.getParent() == null && mediaView == frameView) {
+            familyScreenSurface.addView(frameView, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
             ));
-            familyScreenSurface.addView(frameView, new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    0,
-                    1f
-            ));
-        } else {
-            familyScreenSurface.addView(mediaView, new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.MATCH_PARENT
-            ));
+        }
+        if (frameView != null) {
+            frameView.setVisibility(mediaView == frameView ? View.VISIBLE : View.GONE);
+            if (mediaView == frameView) {
+                frameView.bringToFront();
+            }
         }
         familyWaitingView.setVisibility(View.GONE);
         familyScreenLabelView.setVisibility(View.VISIBLE);
@@ -1379,7 +1431,8 @@ public class MainActivity extends Activity {
             params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, height);
             params.setMargins(0, 0, 0, dp(10));
         } else {
-            params.height = height;
+            params.height = familyLastActive && familyMediaReady ? 0 : height;
+            params.weight = familyLastActive && familyMediaReady ? 1f : 0f;
         }
         familyScreenSurface.setLayoutParams(params);
     }
@@ -1397,7 +1450,6 @@ public class MainActivity extends Activity {
         if (rtcVideoReady && lastRtcFrameAtMs > 0
                 && System.currentTimeMillis() - lastRtcFrameAtMs > RTC_STALE_FRAME_MS) {
             rtcVideoReady = false;
-            rtcLiveDisplayed = false;
         }
         statusIo.execute(() -> {
             try {
@@ -1582,17 +1634,20 @@ public class MainActivity extends Activity {
         }
         familyControlRequestButton.setTag(null);
         if (allowed) {
-            familyControlRequestButton.setText("远程操作已授权");
-            familyControlRequestButton.setEnabled(false);
-            familyControlRequestButton.setAlpha(0.72f);
+            familyControlRequestButton.setVisibility(View.GONE);
+            if (familyRemoteButton != null) familyRemoteButton.setVisibility(View.VISIBLE);
         } else if (requested) {
-            familyControlRequestButton.setText("等待长辈授权...");
+            familyControlRequestButton.setVisibility(View.VISIBLE);
+            familyControlRequestButton.setText("等待长辈授权");
             familyControlRequestButton.setEnabled(false);
             familyControlRequestButton.setAlpha(0.72f);
+            if (familyRemoteButton != null) familyRemoteButton.setVisibility(View.GONE);
         } else {
-            familyControlRequestButton.setText("请求远程操作授权");
+            familyControlRequestButton.setVisibility(View.VISIBLE);
+            familyControlRequestButton.setText("申请远程操作");
             familyControlRequestButton.setEnabled(true);
             familyControlRequestButton.setAlpha(1f);
+            if (familyRemoteButton != null) familyRemoteButton.setVisibility(View.GONE);
         }
     }
 
@@ -1693,21 +1748,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void handleRemoteTouchOnView(View view, float endX, float endY) {
-        float distance = (float) Math.hypot(endX - screenTouchStartX, endY - screenTouchStartY);
-        float[] start = normalizedRtcPoint(view, screenTouchStartX, screenTouchStartY);
-        float[] end = normalizedRtcPoint(view, endX, endY);
-        if (start == null || end == null) {
-            setStatus("请在屏幕画面内完成操作");
-            return;
-        }
-        if (distance > dp(42)) {
-            sendRemoteSwipe(start[0], start[1], end[0], end[1], gestureDuration());
-        } else {
-            sendRemoteTap(end[0], end[1]);
-        }
-    }
-
     private long gestureDuration() {
         long elapsed = System.currentTimeMillis() - screenTouchStartAtMs;
         return Math.max(180, Math.min(700, elapsed));
@@ -1732,48 +1772,6 @@ public class MainActivity extends Activity {
         return new float[]{
                 Math.max(0f, Math.min(1f, x)),
                 Math.max(0f, Math.min(1f, y))
-        };
-    }
-
-    private float[] normalizedViewPoint(View view, float touchX, float touchY) {
-        if (view == null) {
-            return new float[]{0.5f, 0.5f};
-        }
-        int width = Math.max(1, view.getWidth());
-        int height = Math.max(1, view.getHeight());
-        float x = touchX / width;
-        float y = touchY / height;
-        return new float[]{
-                Math.max(0f, Math.min(1f, x)),
-                Math.max(0f, Math.min(1f, y))
-        };
-    }
-
-    private float[] normalizedRtcPoint(View view, float touchX, float touchY) {
-        if (view == null || rtcFrameWidth <= 0 || rtcFrameHeight <= 0) {
-            return normalizedViewPoint(view, touchX, touchY);
-        }
-        int sourceWidth = rtcFrameWidth;
-        int sourceHeight = rtcFrameHeight;
-        if (Math.abs(rtcFrameRotation) % 180 != 0) {
-            int swapped = sourceWidth;
-            sourceWidth = sourceHeight;
-            sourceHeight = swapped;
-        }
-        int viewWidth = Math.max(1, view.getWidth());
-        int viewHeight = Math.max(1, view.getHeight());
-        float scale = Math.min(viewWidth / (float) sourceWidth, viewHeight / (float) sourceHeight);
-        float displayedWidth = sourceWidth * scale;
-        float displayedHeight = sourceHeight * scale;
-        float left = (viewWidth - displayedWidth) / 2f;
-        float top = (viewHeight - displayedHeight) / 2f;
-        if (touchX < left || touchX > left + displayedWidth
-                || touchY < top || touchY > top + displayedHeight) {
-            return null;
-        }
-        return new float[]{
-                (touchX - left) / Math.max(1f, displayedWidth),
-                (touchY - top) / Math.max(1f, displayedHeight)
         };
     }
 
@@ -2490,31 +2488,7 @@ public class MainActivity extends Activity {
     }
 
     private void showControlRequestNotification() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            return;
-        }
-        Intent intent = new Intent(this, MainActivity.class);
-        intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-                this,
-                0,
-                intent,
-                Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE : PendingIntent.FLAG_UPDATE_CURRENT
-        );
-        android.app.Notification.Builder builder = Build.VERSION.SDK_INT >= 26
-                ? new android.app.Notification.Builder(this, CHANNEL_CONTROL)
-                : new android.app.Notification.Builder(this);
-        android.app.Notification notification = builder
-                .setContentTitle("家属请求远程点击")
-                .setContentText("点这里回到亲情帮帮，确认是否允许本次协助。")
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentIntent(pendingIntent)
-                .setAutoCancel(true)
-                .build();
-        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (manager != null) {
-            manager.notify(NOTIFICATION_CONTROL_REQUEST, notification);
-        }
+        AssistNotifier.showControlRequestNotification(this);
     }
 
     private LinearLayout verticalRoot() {
@@ -2729,9 +2703,8 @@ public class MainActivity extends Activity {
         return view;
     }
 
-    private LinearLayout screenSurface(View child) {
-        LinearLayout surface = new LinearLayout(this);
-        surface.setOrientation(LinearLayout.VERTICAL);
+    private FrameLayout screenSurface(View child) {
+        FrameLayout surface = new FrameLayout(this);
         surface.setPadding(dp(3), dp(3), dp(3), dp(3));
         surface.setBackground(rounded(0xFF0F172A, dp(8), COLOR_LINE));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
@@ -2740,9 +2713,9 @@ public class MainActivity extends Activity {
         );
         params.setMargins(0, 0, 0, dp(10));
         surface.setLayoutParams(params);
-        surface.addView(child, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
+        surface.addView(child, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
         ));
         return surface;
     }
