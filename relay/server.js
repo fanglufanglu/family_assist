@@ -325,6 +325,8 @@ const server = http.createServer(async (req, res) => {
       family.deviceName = String(payload.deviceName || "");
       family.masked = Boolean(payload.masked);
       family.updatedAt = new Date().toISOString();
+      family.frame = null;
+      family.frameUpdatedAt = "";
       family.lastFamilySeenAtMs = 0;
       family.lastFamilySeenAt = "";
       family.activeHelperToken = "";
@@ -366,13 +368,15 @@ const server = http.createServer(async (req, res) => {
       const result = requireMember(res, pairCode, authToken, "elder");
       if (!result) return;
       const sessionId = String(payload.sessionId || "").trim();
-      if (sessionId && result.family.sessionId && sessionId !== result.family.sessionId) {
+      if (result.family.active && (!sessionId || sessionId !== result.family.sessionId)) {
         sendJson(res, 200, { ok: true, stale: true });
         return;
       }
       result.family.active = false;
       result.family.sessionId = "";
       result.family.annotation = null;
+      result.family.frame = null;
+      result.family.frameUpdatedAt = "";
       result.family.controlAllowed = false;
       result.family.controlRequested = false;
       result.family.controlAction = null;
@@ -394,13 +398,15 @@ const server = http.createServer(async (req, res) => {
       if (!result) return;
       if (!requireActiveHelper(res, result, authToken)) return;
       const sessionId = String(payload.sessionId || "").trim();
-      if (sessionId && result.family.sessionId && sessionId !== result.family.sessionId) {
+      if (!sessionId || sessionId !== result.family.sessionId) {
         sendJson(res, 200, { ok: true, stale: true });
         return;
       }
       result.family.active = false;
       result.family.sessionId = "";
       result.family.annotation = null;
+      result.family.frame = null;
+      result.family.frameUpdatedAt = "";
       result.family.controlAllowed = false;
       result.family.controlRequested = false;
       result.family.controlAction = null;

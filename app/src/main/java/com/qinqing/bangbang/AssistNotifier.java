@@ -55,6 +55,10 @@ final class AssistNotifier {
                 return;
             }
             SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            if (prefs.getBoolean("appForeground", false)
+                    && prefs.getBoolean("elderPageVisible", false)) {
+                return;
+            }
             String notifiedAt = prefs.getString("notifiedControlRequestAt", "");
             String handledAt = prefs.getString("handledControlRequestAt", "");
             if (updatedAt.equals(notifiedAt) || updatedAt.equals(handledAt)) {

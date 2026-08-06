@@ -24,6 +24,7 @@ import org.webrtc.SdpObserver;
 import org.webrtc.SessionDescription;
 import org.webrtc.SurfaceTextureHelper;
 import org.webrtc.VideoCapturer;
+import org.webrtc.VideoFrame;
 import org.webrtc.VideoSource;
 import org.webrtc.VideoTrack;
 
@@ -39,6 +40,7 @@ final class WebRtcClient {
     interface Listener {
         void onState(String text);
         void onRemoteVideo(VideoTrack track);
+        void onLocalVideoFrame(VideoFrame frame);
     }
 
     private final Context context;
@@ -56,6 +58,7 @@ final class WebRtcClient {
     private VideoCapturer capturer;
     private VideoSource videoSource;
     private boolean running;
+    private boolean icePolling;
     private String role;
     private int remoteIceIndex;
 
@@ -81,7 +84,6 @@ final class WebRtcClient {
                 addScreenTrack(projectionData);
                 createOffer();
                 pollAnswerLoop();
-                pollIceLoop();
                 notifyState("实时屏幕已启动，正在等待家属连接。");
             } catch (Throwable e) {
                 notifyState("WebRTC 启动失败：" + safeMessage(e));
@@ -96,7 +98,6 @@ final class WebRtcClient {
             try {
                 initPeer();
                 pollOfferLoop();
-                pollIceLoop();
                 notifyState("正在建立实时连接...");
             } catch (Throwable e) {
                 notifyState("WebRTC 启动失败：" + safeMessage(e));
@@ -205,6 +206,11 @@ final class WebRtcClient {
         capturer.initialize(textureHelper, context, videoSource.getCapturerObserver());
         capturer.startCapture(540, 960, 18);
         VideoTrack videoTrack = factory.createVideoTrack("elder-screen", videoSource);
+        videoTrack.addSink(frame -> {
+            if (listener != null && running) {
+                listener.onLocalVideoFrame(frame);
+            }
+        });
         peerConnection.addTrack(videoTrack, Collections.singletonList("assist"));
     }
 
@@ -212,8 +218,15 @@ final class WebRtcClient {
         peerConnection.createOffer(new SimpleSdpObserver() {
             @Override
             public void onCreateSuccess(SessionDescription description) {
-                peerConnection.setLocalDescription(new SimpleSdpObserver(), description);
-                postSdp("/api/webrtc/offer", description);
+                peerConnection.setLocalDescription(new SimpleSdpObserver(
+                        () -> postSdp("/api/webrtc/offer", description),
+                        error -> notifyState("设置本地 Offer 失败：" + error)
+                ), description);
+            }
+
+            @Override
+            public void onCreateFailure(String error) {
+                notifyState("创建实时 Offer 失败：" + error);
             }
         }, new MediaConstraints());
     }
@@ -224,8 +237,13 @@ final class WebRtcClient {
             JSONObject offer = result.optJSONObject("offer");
             if (offer != null && !offer.optString("sdp", "").isEmpty()) {
                 SessionDescription remote = new SessionDescription(SessionDescription.Type.OFFER, offer.optString("sdp"));
-                peerConnection.setRemoteDescription(new SimpleSdpObserver(), remote);
-                createAnswer();
+                peerConnection.setRemoteDescription(new SimpleSdpObserver(
+                        () -> {
+                            createAnswer();
+                            pollIceLoop();
+                        },
+                        error -> notifyState("接收长辈画面信令失败：" + error)
+                ), remote);
                 return;
             }
             Thread.sleep(500);
@@ -236,8 +254,15 @@ final class WebRtcClient {
         peerConnection.createAnswer(new SimpleSdpObserver() {
             @Override
             public void onCreateSuccess(SessionDescription description) {
-                peerConnection.setLocalDescription(new SimpleSdpObserver(), description);
-                postSdp("/api/webrtc/answer", description);
+                peerConnection.setLocalDescription(new SimpleSdpObserver(
+                        () -> postSdp("/api/webrtc/answer", description),
+                        error -> notifyState("设置本地 Answer 失败：" + error)
+                ), description);
+            }
+
+            @Override
+            public void onCreateFailure(String error) {
+                notifyState("创建实时 Answer 失败：" + error);
             }
         }, new MediaConstraints());
     }
@@ -248,8 +273,13 @@ final class WebRtcClient {
             JSONObject answer = result.optJSONObject("answer");
             if (answer != null && !answer.optString("sdp", "").isEmpty()) {
                 SessionDescription remote = new SessionDescription(SessionDescription.Type.ANSWER, answer.optString("sdp"));
-                peerConnection.setRemoteDescription(new SimpleSdpObserver(), remote);
-                notifyState("实时连接已建立。");
+                peerConnection.setRemoteDescription(new SimpleSdpObserver(
+                        () -> {
+                            pollIceLoop();
+                            notifyState("实时连接已建立。");
+                        },
+                        error -> notifyState("接收家属连接信令失败：" + error)
+                ), remote);
                 return;
             }
             Thread.sleep(500);
@@ -257,6 +287,10 @@ final class WebRtcClient {
     }
 
     private void pollIceLoop() {
+        if (icePolling) {
+            return;
+        }
+        icePolling = true;
         io.execute(() -> {
             String from = "elder".equals(role) ? "family" : "elder";
             while (running) {
@@ -283,6 +317,7 @@ final class WebRtcClient {
                 } catch (Exception ignored) {
                 }
             }
+            icePolling = false;
         });
     }
 
@@ -363,10 +398,32 @@ final class WebRtcClient {
         }
     };
 
+    private interface ErrorCallback {
+        void run(String error);
+    }
+
     private static class SimpleSdpObserver implements SdpObserver {
+        private final Runnable onSetSuccess;
+        private final ErrorCallback onFailure;
+
+        SimpleSdpObserver() {
+            this(null, null);
+        }
+
+        SimpleSdpObserver(Runnable onSetSuccess, ErrorCallback onFailure) {
+            this.onSetSuccess = onSetSuccess;
+            this.onFailure = onFailure;
+        }
+
         @Override public void onCreateSuccess(SessionDescription sessionDescription) {}
-        @Override public void onSetSuccess() {}
-        @Override public void onCreateFailure(String error) {}
-        @Override public void onSetFailure(String error) {}
+        @Override public void onSetSuccess() {
+            if (onSetSuccess != null) onSetSuccess.run();
+        }
+        @Override public void onCreateFailure(String error) {
+            if (onFailure != null) onFailure.run(error);
+        }
+        @Override public void onSetFailure(String error) {
+            if (onFailure != null) onFailure.run(error);
+        }
     }
 }

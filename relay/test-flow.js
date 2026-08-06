@@ -72,11 +72,38 @@ async function run() {
 
   const wrongEnd = await post("/api/family/end", { pairCode, authToken: second.body.authToken, sessionId });
   assert(wrongEnd.status === 409, "non-active relative must not end the session");
+
+  const controlRequest = await post("/api/control/request", { pairCode, authToken: first.body.authToken });
+  assert(controlRequest.status === 200 && controlRequest.body.family.controlRequested, "control request should be visible to elder");
+  const controlAllow = await post("/api/control/allow", { pairCode, authToken: elderToken, allowed: true });
+  assert(controlAllow.status === 200 && controlAllow.body.family.controlAllowed, "control approval should be visible to family");
+  const approvedState = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
+  assert(approvedState.body.controlAllowed && !approvedState.body.controlRequested, "approved control state should synchronize");
+
   const rightEnd = await post("/api/family/end", { pairCode, authToken: first.body.authToken, sessionId });
   assert(rightEnd.status === 200, "active relative should end the session");
+  const endedState = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
+  assert(!endedState.body.active && !endedState.body.controlAllowed, "ending should clear active and control state");
 
   const nextHelp = await post("/api/help", { pairCode, authToken: elderToken, elderName: "妈妈" });
   assert(nextHelp.status === 200 && nextHelp.body.sessionId !== sessionId, "elder should start a fresh second session");
+  await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
+  const offer = await post("/api/webrtc/offer", {
+    pairCode, authToken: elderToken, sessionId: nextHelp.body.sessionId, type: "offer", sdp: "offer-sdp",
+  });
+  assert(offer.status === 200, "elder WebRTC offer should be accepted");
+  const relayedOffer = await get(`/api/webrtc/offer?pairCode=${pairCode}&authToken=${first.body.authToken}`);
+  assert(relayedOffer.body.offer.sdp === "offer-sdp", "family should receive the current offer");
+  const answer = await post("/api/webrtc/answer", {
+    pairCode, authToken: first.body.authToken, sessionId: nextHelp.body.sessionId, type: "answer", sdp: "answer-sdp",
+  });
+  assert(answer.status === 200, "family WebRTC answer should be accepted");
+  const relayedAnswer = await get(`/api/webrtc/answer?pairCode=${pairCode}&authToken=${elderToken}`);
+  assert(relayedAnswer.body.answer.sdp === "answer-sdp", "elder should receive the current answer");
+  const staleEnd = await post("/api/end", { pairCode, authToken: elderToken, sessionId });
+  assert(staleEnd.body.stale, "an old session must not end a newer session");
+  const stillActive = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
+  assert(stillActive.body.active && stillActive.body.sessionId === nextHelp.body.sessionId, "new session should survive stale end requests");
   console.log("Relay flow regression passed.");
 }
 
