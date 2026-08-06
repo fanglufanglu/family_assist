@@ -4,11 +4,14 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.Service;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.IBinder;
+
+import org.json.JSONObject;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -20,6 +23,7 @@ public class WebRtcScreenService extends Service {
     static final String EXTRA_RESULT_DATA = "resultData";
 
     private static final String CHANNEL_ID = "webrtc_screen";
+    private static final String PREFS = "family-assist";
     private WebRtcClient client;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService monitorIo = Executors.newSingleThreadExecutor();
@@ -91,6 +95,12 @@ public class WebRtcScreenService extends Service {
     @Override
     public void onDestroy() {
         monitoring = false;
+        endRelaySession();
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putBoolean("assistActive", false)
+                .putBoolean("remoteControlAllowed", false)
+                .remove("assistStartedAtMs")
+                .apply();
         if (client != null) {
             client.stop();
             client = null;
@@ -102,6 +112,21 @@ public class WebRtcScreenService extends Service {
     @Override
     public IBinder onBind(Intent intent) {
         return null;
+    }
+
+    private void endRelaySession() {
+        if (baseUrl == null || pairCode == null || authToken == null
+                || baseUrl.isEmpty() || pairCode.isEmpty() || authToken.isEmpty()) {
+            return;
+        }
+        new Thread(() -> {
+            try {
+                NetworkClient.postJson(baseUrl, "/api/end", new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken));
+            } catch (Exception ignored) {
+            }
+        }, "webrtc-end-relay").start();
     }
 
     private Notification buildNotification(String text) {

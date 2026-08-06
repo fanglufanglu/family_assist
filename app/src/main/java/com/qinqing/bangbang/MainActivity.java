@@ -290,7 +290,7 @@ public class MainActivity extends Activity {
 
         if (!isBoundAs("elder")) {
             EditText nameInput = input("长辈名称，例如 妈妈", displayName);
-            Button inviteButton = primaryButton("生成亲属绑定码");
+            Button inviteButton = primaryButton("第 1 步：生成亲属绑定码");
             Button backButton = secondaryButton("返回首页");
             inviteButton.setOnClickListener(v -> {
                 displayName = nameInput.getText().toString().trim();
@@ -306,7 +306,7 @@ public class MainActivity extends Activity {
                 showSetup();
             });
 
-            LinearLayout bindCard = card("第一步：绑定家属", "点下面按钮生成 6 位码，把它告诉家属。绑定后再发起协助。");
+            LinearLayout bindCard = card("先绑定家属", "只需要做一次。点下面蓝色按钮，生成 6 位码后告诉家属。");
             bindCard.addView(label("我的称呼"));
             bindCard.addView(nameInput);
             bindCard.addView(inviteButton);
@@ -325,8 +325,6 @@ public class MainActivity extends Activity {
         boolean assisting = prefs.getBoolean("assistActive", false);
         Button helpButton = primaryButton(elderPrimaryButtonText());
         helpButton.setTextSize(24);
-        helpButton.setEnabled(!assisting);
-        helpButton.setAlpha(assisting ? 0.62f : 1f);
         Button stopButton = dangerButton("停止协助");
         Button safetyButton = secondaryButton("更多设置");
         Button backButton = secondaryButton("返回首页");
@@ -342,7 +340,7 @@ public class MainActivity extends Activity {
 
         root.addView(helpButton);
 
-        LinearLayout stepsCard = card(assisting ? "协助进行中" : "现在只要做一件事", elderAssistHintText());
+        LinearLayout stepsCard = card(assisting ? "协助进行中" : elderCurrentStepTitle(), elderAssistHintText());
         root.addView(stepsCard);
 
         root.addView(status);
@@ -672,7 +670,12 @@ public class MainActivity extends Activity {
                     main.post(afterSuccess);
                 }
             } catch (Exception e) {
-                main.post(() -> setStatus("发送失败：" + e.getMessage()));
+                main.post(() -> {
+                    markAssistanceStoppedLocal();
+                    stopCaptureServices();
+                    showElder();
+                    setStatus("发起协助失败：" + friendlyError(e) + "。请检查 Relay 后重试。");
+                });
             }
         });
     }
@@ -875,9 +878,9 @@ public class MainActivity extends Activity {
                 main.post(() -> {
                     String controlText = familyControlAllowed ? "远程点击已授权。" : "未授权远程点击。";
                     if (lastFrameReceivedAtMs == 0) {
-                        setStatus(elderName + " 已开始协助，正在接收第一张画面。" + controlText);
+                        setStatus("正在协助 " + elderName + "，正在接收第一张画面。" + controlText);
                     } else {
-                        setStatus(elderName + " 正在协助中。" + controlText + " 最后更新：" + updatedAt);
+                        setStatus("我在协助 " + elderName + "。" + controlText + " 最后更新：" + updatedAt);
                     }
                 });
                 if (!isWebRtcEnabled()) {
@@ -1267,17 +1270,25 @@ public class MainActivity extends Activity {
     }
 
     private void stopAssistance(String message) {
+        stopCaptureServices();
+        markAssistanceStoppedLocal();
+        endHelpRequest();
+        showElder();
+        setStatus(message);
+    }
+
+    private void stopCaptureServices() {
         stopService(new Intent(this, CaptureService.class));
         stopService(new Intent(this, WebRtcScreenService.class));
         stopService(new Intent(this, AnnotationOverlayService.class));
+    }
+
+    private void markAssistanceStoppedLocal() {
         prefs.edit()
                 .putBoolean("remoteControlAllowed", false)
                 .putBoolean("assistActive", false)
                 .remove("assistStartedAtMs")
                 .apply();
-        endHelpRequest();
-        showElder();
-        setStatus(message);
     }
 
     private void handleRemoteControlRequest(String updatedAt) {
@@ -1387,6 +1398,12 @@ public class MainActivity extends Activity {
         if (needsOverlayPermission()) {
             ensureOverlayPermission();
             return;
+        }
+        if (prefs.getBoolean("assistActive", false)) {
+            stopCaptureServices();
+            endHelpRequest();
+            markAssistanceStoppedLocal();
+            setStatus("正在重新发起协助...");
         }
         requestHelpAndCapture();
     }
@@ -1613,23 +1630,30 @@ public class MainActivity extends Activity {
 
     private String elderPrimaryButtonText() {
         if (prefs.getBoolean("assistActive", false)) {
-            return "协助进行中";
+            return "重新发起协助";
         }
         if (needsOverlayPermission()) {
-            return "允许画圈提示";
+            return "第 2 步：允许画圈提示";
         }
-        return "开始协助";
+        return "第 3 步：开始协助";
+    }
+
+    private String elderCurrentStepTitle() {
+        if (needsOverlayPermission()) {
+            return "第 2 步：先允许画圈提示";
+        }
+        return "第 3 步：开始协助";
     }
 
     private String elderAssistHintText() {
         if (prefs.getBoolean("assistActive", false)) {
-            return "家属正在连接或查看你的屏幕。请保持此页面或切到需要帮忙的 App；需要结束时点“停止协助”。";
+            return "家属正在连接或查看你的屏幕。可以切到需要帮忙的 App；如果家属看不到画面，点上面的“重新发起协助”。";
         }
         if (needsOverlayPermission()) {
-            return "第一次需要先允许家属的红圈提示。点蓝色按钮后，在系统页允许“显示在其他应用上层”，再按返回键回来。";
+            return "只需要设置一次。点蓝色按钮后，在系统页允许“显示在其他应用上层”，再按返回键回来。";
         }
         if (!isAccessibilityServiceEnabled()) {
-            return "点蓝色按钮即可开始屏幕协助。敏感保护和远程点击需要辅助服务，可稍后由家属指导开启。";
+            return "点蓝色按钮，然后在系统弹窗点“立即开始”。家属就能看到你的屏幕并画圈提示。";
         }
         return "点蓝色按钮，确认屏幕共享后，家属就能看到实时画面并帮你。";
     }

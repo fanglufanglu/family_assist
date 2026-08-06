@@ -31,6 +31,8 @@ import java.net.URLEncoder;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
+import org.json.JSONObject;
+
 public class CaptureService extends Service {
     static final String EXTRA_BASE_URL = "baseUrl";
     static final String EXTRA_PAIR_CODE = "pairCode";
@@ -50,6 +52,7 @@ public class CaptureService extends Service {
     private String pairCode;
     private String authToken;
     private long lastControlCheckMs;
+    private boolean destroyed;
 
     @Override
     public void onCreate() {
@@ -93,6 +96,13 @@ public class CaptureService extends Service {
 
     @Override
     public void onDestroy() {
+        destroyed = true;
+        endRelaySession();
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putBoolean("assistActive", false)
+                .putBoolean("remoteControlAllowed", false)
+                .remove("assistStartedAtMs")
+                .apply();
         if (virtualDisplay != null) {
             virtualDisplay.release();
         }
@@ -142,11 +152,29 @@ public class CaptureService extends Service {
     private final Runnable captureLoop = new Runnable() {
         @Override
         public void run() {
+            if (destroyed) {
+                return;
+            }
             captureAndUpload();
             maybePollControlRequest();
             worker.postDelayed(this, 520);
         }
     };
+
+    private void endRelaySession() {
+        if (baseUrl == null || pairCode == null || authToken == null
+                || baseUrl.isEmpty() || pairCode.isEmpty() || authToken.isEmpty()) {
+            return;
+        }
+        new Thread(() -> {
+            try {
+                NetworkClient.postJson(baseUrl, "/api/end", new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken));
+            } catch (Exception ignored) {
+            }
+        }, "capture-end-relay").start();
+    }
 
     private void maybePollControlRequest() {
         long now = System.currentTimeMillis();
