@@ -487,6 +487,7 @@ public class MainActivity extends Activity {
         setContentView(scroll(root));
         if (useWebRtc) {
             startFamilyWebRtc();
+            scheduleWebRtcFallback();
         }
         pollFamilyLoop();
     }
@@ -555,9 +556,9 @@ public class MainActivity extends Activity {
                     return true;
                 }
                 if (familyControlAllowed) {
-                    handleRemoteTouchOnView(rtcView, event.getX(), event.getY());
+                    handleRemoteTouchOnView(view, event.getX(), event.getY());
                 } else {
-                    float[] point = normalizedViewPoint(rtcView, event.getX(), event.getY());
+                    float[] point = normalizedViewPoint(view, event.getX(), event.getY());
                     sendAnnotation(point[0], point[1]);
                 }
                 return true;
@@ -829,6 +830,18 @@ public class MainActivity extends Activity {
             rtcView = null;
         }
         rtcVideoReady = false;
+    }
+
+    private void scheduleWebRtcFallback() {
+        main.postDelayed(() -> {
+            if (!familyPolling || !isWebRtcEnabled() || rtcVideoReady) {
+                return;
+            }
+            prefs.edit().putBoolean("webRtcEnabled", false).apply();
+            stopFamilyWebRtc();
+            showFamily();
+            setStatus("实时画面暂时未连上，已自动切到稳定屏幕模式。");
+        }, 8000);
     }
 
     private void pollFamilyLoop() {
@@ -1106,6 +1119,9 @@ public class MainActivity extends Activity {
     }
 
     private float[] normalizedViewPoint(View view, float touchX, float touchY) {
+        if (view == null) {
+            return new float[]{0.5f, 0.5f};
+        }
         int width = Math.max(1, view.getWidth());
         int height = Math.max(1, view.getHeight());
         float x = touchX / width;
