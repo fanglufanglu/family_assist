@@ -1,12 +1,12 @@
 # 亲情帮帮阿里云正式环境
 
-当前阶段暂不购买域名，使用中国香港 ECS 公网 IP：
+当前阶段不购买域名，使用中国香港 ECS 公网 IP 和短周期 IP 证书：
 
 ```text
-http://47.238.240.30
+https://47.238.240.30
 ```
 
-这套配置用于第一版正式验证。后续购买域名后，应切换为 HTTPS：
+这套配置可用于第一版正式验证。后续购买域名后，再切换为长期域名地址：
 
 ```text
 https://api.qinqingbangbang.com
@@ -15,7 +15,7 @@ https://api.qinqingbangbang.com
 ## 服务组成
 
 - `family-assist-relay`：Node.js relay，负责亲属绑定、协助会话、WebRTC 信令、画圈提示、远程操作指令、审计和崩溃日志。
-- `nginx`：对外监听 `80`，反向代理到本机 `8787`。
+- `nginx`：监听 `80/443`，HTTP 自动跳转 HTTPS，并反向代理到本机 `8787`。
 - `coturn`：WebRTC TURN 服务，提升不同网络下实时屏幕连接成功率。
 - `logrotate`：轮转 `/var/log/family-assist/*.log`。
 
@@ -48,6 +48,7 @@ git pull
 chmod +x scripts/install-aliyun-production.sh scripts/check-aliyun-production.sh
 DB_PASSWORD='替换成数据库长随机密码' bash scripts/install-postgres-backup.sh
 TURN_PASSWORD='替换成TURN长随机密码' DB_PASSWORD='同上数据库密码' bash scripts/install-aliyun-production.sh
+LE_EMAIL='证书到期通知邮箱' bash scripts/enable-aliyun-ip-https.sh
 ```
 
 ## PostgreSQL 与每日备份
@@ -83,8 +84,8 @@ ls -lh /var/backups/family-assist-postgres
 
 ```bash
 bash scripts/check-aliyun-production.sh
-curl http://47.238.240.30/health
-curl http://47.238.240.30/api/ice-config
+curl https://47.238.240.30/health
+curl https://47.238.240.30/api/ice-config
 ```
 
 ## 日常更新
@@ -94,6 +95,7 @@ cd /opt/family_assist
 git pull
 systemctl restart family-assist-relay
 bash scripts/check-aliyun-production.sh
+curl -fsS https://47.238.240.30/health
 ```
 
 ## 数据持久化
@@ -143,10 +145,27 @@ journalctl -u family-assist-relay -n 100 --no-pager
 journalctl -u coturn -n 100 --no-pager
 ```
 
+## 找回密码短信网关
+
+正式环境需要准备短信发送网关，并在 `family-assist-relay.service` 中增加：
+
+```text
+Environment=SMS_WEBHOOK_URL=https://你的短信网关地址
+Environment=SMS_WEBHOOK_TOKEN=一串独立的长随机令牌
+```
+
+然后执行：
+
+```bash
+systemctl daemon-reload
+systemctl restart family-assist-relay
+```
+
+正式环境不要设置 `RESET_CODE_EXPOSED=true`。
+
 ## 正式发布前仍需补齐
 
-- 域名和 HTTPS。
+- 短信服务实名、签名和模板审核。
 - TURN 密码定期轮换。
 - 云监控告警：CPU、内存、磁盘、公网流量、服务健康检查。
-- 数据库迁移：用户增长后从 JSON 状态文件迁移到 PostgreSQL/MySQL。
 - 完整应用市场资料：隐私政策 URL、用户协议 URL、权限说明截图、客服电话/邮箱、公司主体。

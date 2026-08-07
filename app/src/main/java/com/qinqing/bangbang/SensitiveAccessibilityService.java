@@ -16,6 +16,7 @@ import org.json.JSONObject;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -183,7 +184,7 @@ public class SensitiveAccessibilityService extends AccessibilityService {
         if (pkg == null) {
             return false;
         }
-        String value = pkg.toString().toLowerCase();
+        String value = pkg.toString().toLowerCase(Locale.ROOT);
         return value.contains("alipay")
                 || value.contains("bank")
                 || value.contains("wallet")
@@ -222,6 +223,6 @@ public class SensitiveAccessibilityService extends AccessibilityService {
                 || value.contains("人脸识别")
                 || value.contains("贷款")
                 || value.contains("免密支付")
-                || value.toLowerCase().contains("password");
+                || value.toLowerCase(Locale.ROOT).contains("password");
     }
 }

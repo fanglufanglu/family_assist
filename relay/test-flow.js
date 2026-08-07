@@ -4,7 +4,13 @@ const port = 8796;
 const baseUrl = `http://127.0.0.1:${port}`;
 const relay = spawn(process.execPath, ["server.js"], {
   cwd: __dirname,
-  env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), RELAY_DATA_DIR: `/tmp/family-assist-relay-test-${process.pid}` },
+  env: {
+    ...process.env,
+    HOST: "127.0.0.1",
+    PORT: String(port),
+    RELAY_DATA_DIR: `/tmp/family-assist-relay-test-${process.pid}`,
+    RESET_CODE_EXPOSED: "true",
+  },
   stdio: ["ignore", "pipe", "inherit"],
 });
 
@@ -54,6 +60,27 @@ async function run() {
   const familyAccount = await post("/api/account/login", { phone: "13800000002", password: "familyPass123", name: "女儿" });
   assert(elderAccount.status === 200 && elderAccount.body.accountToken, "elder account should log in with password");
   assert(familyAccount.status === 200 && familyAccount.body.accountToken, "family account should log in with password");
+
+  const resetRegister = await post("/api/account/register", { phone: "13800000003", password: "beforeReset123", name: "测试账号" });
+  assert(resetRegister.status === 200, "reset test account should register");
+  const resetRequest = await post("/api/account/password/reset/request", { phone: "13800000003" });
+  assert(resetRequest.status === 200 && /^\d{6}$/.test(resetRequest.body.debugCode), "reset request should issue a test code");
+  const resetConfirm = await post("/api/account/password/reset/confirm", {
+    phone: "13800000003",
+    code: resetRequest.body.debugCode,
+    password: "afterReset123",
+  });
+  assert(resetConfirm.status === 200 && resetConfirm.body.accountToken !== resetRegister.body.accountToken,
+    "password reset should rotate the account token");
+  const oldLogin = await post("/api/account/login", { phone: "13800000003", password: "beforeReset123" });
+  const newLogin = await post("/api/account/login", { phone: "13800000003", password: "afterReset123" });
+  assert(oldLogin.status === 403 && newLogin.status === 200, "only the new password should work after reset");
+  const deleteAccount = await post("/api/account/delete", {
+    accountToken: newLogin.body.accountToken,
+    password: "afterReset123",
+  });
+  const deletedLogin = await post("/api/account/login", { phone: "13800000003", password: "afterReset123" });
+  assert(deleteAccount.status === 200 && deletedLogin.status === 403, "deleted account must not be able to log in");
 
   const securePairCode = "secure-regression001";
   const secureInvite = await post("/api/invite", {

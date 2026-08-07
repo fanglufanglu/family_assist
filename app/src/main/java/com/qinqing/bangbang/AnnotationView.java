@@ -12,6 +12,9 @@ final class AnnotationView extends View {
     private final Paint circlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint fillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint labelBackgroundPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final DisplayMetrics displayMetrics = new DisplayMetrics();
+    private final int[] screenLocation = new int[2];
     private float x = -1f;
     private float y = -1f;
     private float radius = 0.08f;
@@ -29,6 +32,7 @@ final class AnnotationView extends View {
         textPaint.setColor(Color.WHITE);
         textPaint.setTextSize(42f);
         textPaint.setFakeBoldText(true);
+        labelBackgroundPaint.setColor(Color.rgb(214, 79, 69));
         setWillNotDraw(false);
     }
 
@@ -56,12 +60,10 @@ final class AnnotationView extends View {
         float cy = y * getHeight();
         WindowManager windowManager = (WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE);
         if (windowManager != null) {
-            DisplayMetrics metrics = new DisplayMetrics();
-            windowManager.getDefaultDisplay().getRealMetrics(metrics);
-            int[] location = new int[2];
-            getLocationOnScreen(location);
-            cx = x * metrics.widthPixels - location[0];
-            cy = y * metrics.heightPixels - location[1];
+            windowManager.getDefaultDisplay().getRealMetrics(displayMetrics);
+            getLocationOnScreen(screenLocation);
+            cx = x * displayMetrics.widthPixels - screenLocation[0];
+            cy = y * displayMetrics.heightPixels - screenLocation[1];
         }
         float r = radius * Math.min(getWidth(), getHeight());
         canvas.drawCircle(cx, cy, r, fillPaint);
@@ -70,9 +72,7 @@ final class AnnotationView extends View {
         float textWidth = textPaint.measureText(label);
         float left = Math.max(20f, Math.min(cx - textWidth / 2f, getWidth() - textWidth - 20f));
         float top = Math.max(60f, cy - r - 24f);
-        Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
-        bg.setColor(Color.rgb(220, 38, 38));
-        canvas.drawRoundRect(left - 20f, top - 48f, left + textWidth + 20f, top + 16f, 16f, 16f, bg);
+        canvas.drawRoundRect(left - 20f, top - 48f, left + textWidth + 20f, top + 16f, 16f, 16f, labelBackgroundPaint);
         canvas.drawText(label, left, top, textPaint);
     }
 }

@@ -121,4 +121,5 @@ systemctl restart coturn
 curl -fsS "http://127.0.0.1:${RELAY_PORT}/health"
 curl -fsS "http://${PUBLIC_IP}/health"
 echo
-echo "Family Assist production services are ready on http://${PUBLIC_IP}"
+echo "Family Assist relay is ready on http://${PUBLIC_IP}."
+echo "Run scripts/enable-aliyun-ip-https.sh before distributing a production APK."

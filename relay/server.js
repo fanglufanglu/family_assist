@@ -1,4 +1,5 @@
 const http = require("http");
+const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
@@ -22,12 +23,21 @@ const CONTROL_REQUEST_COOLDOWN_MS = 15_000;
 const CONTROL_ACTION_COOLDOWN_MS = 120;
 const DATABASE_URL = process.env.DATABASE_URL || process.env.FAMILY_ASSIST_DATABASE_URL || "";
 const STATE_ID = "main";
-const PASSWORD_ITERATIONS = 120000;
+const PASSWORD_ITERATIONS = 310000;
 const PASSWORD_KEY_LEN = 32;
 const PASSWORD_DIGEST = "sha256";
+const RESET_CODE_TTL_MS = 10 * 60 * 1000;
+const RESET_REQUEST_COOLDOWN_MS = 60 * 1000;
+const RESET_MAX_ATTEMPTS = 5;
+const AUTH_WINDOW_MS = 10 * 60 * 1000;
+const AUTH_MAX_ATTEMPTS = 10;
+const SMS_WEBHOOK_URL = String(process.env.SMS_WEBHOOK_URL || "").trim();
+const SMS_WEBHOOK_TOKEN = String(process.env.SMS_WEBHOOK_TOKEN || "").trim();
+const RESET_CODE_EXPOSED = process.env.RESET_CODE_EXPOSED === "true";
 const pgPool = DATABASE_URL && PgPool ? new PgPool({ connectionString: DATABASE_URL }) : null;
 let saveTimer = null;
 let storageReady = false;
+const authAttempts = new Map();
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -53,6 +63,8 @@ function sendJson(res, status, payload) {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": body.length,
     "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
   });
   res.end(body);
 }
@@ -62,9 +74,16 @@ function logRequest(req, res, startedAt) {
   const remote = forwardedFor || req.socket.remoteAddress || "";
   const userAgent = req.headers["user-agent"] || "";
   const elapsedMs = Date.now() - startedAt;
-  console.log(
-    `${new Date().toISOString()} ${req.method} ${req.url} ${res.statusCode} ${elapsedMs}ms remote=${remote} ua="${userAgent}"`
-  );
+  let safeUrl = req.url;
+  try {
+    const parsed = new URL(req.url, "http://relay.local");
+    for (const key of ["authToken", "accountToken", "pendingToken", "inviteCode"]) {
+      if (parsed.searchParams.has(key)) parsed.searchParams.set(key, "[redacted]");
+    }
+    safeUrl = parsed.pathname + parsed.search;
+  } catch (_) {
+  }
+  console.log(`${new Date().toISOString()} ${req.method} ${safeUrl} ${res.statusCode} ${elapsedMs}ms remote=${remote} ua="${userAgent}"`);
 }
 
 function familyFor(pairCode) {
@@ -127,6 +146,91 @@ function makeSessionId() {
 
 function makeId(prefix) {
   return `${prefix}_${crypto.randomBytes(10).toString("hex")}`;
+}
+
+function requestAddress(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return forwarded || req.socket.remoteAddress || "unknown";
+}
+
+function rateLimitKey(req, scope, phone) {
+  return `${scope}:${requestAddress(req)}:${phone || ""}`;
+}
+
+function isRateLimited(key, maxAttempts = AUTH_MAX_ATTEMPTS, windowMs = AUTH_WINDOW_MS) {
+  const now = Date.now();
+  if (authAttempts.size > 5000) {
+    for (const [candidateKey, candidate] of authAttempts.entries()) {
+      if (now - candidate.startedAt >= AUTH_WINDOW_MS) authAttempts.delete(candidateKey);
+    }
+  }
+  const previous = authAttempts.get(key);
+  const entry = !previous || now - previous.startedAt >= windowMs
+    ? { startedAt: now, count: 0 }
+    : previous;
+  entry.count += 1;
+  authAttempts.set(key, entry);
+  return entry.count > maxAttempts;
+}
+
+function clearRateLimit(key) {
+  authAttempts.delete(key);
+}
+
+function findUserByPhone(phone) {
+  return [...users.entries()].find(([, user]) => user.phone === phone) || null;
+}
+
+function makeResetCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function hashResetCode(code, salt) {
+  return crypto.createHash("sha256").update(`${salt}:${code}`).digest("base64url");
+}
+
+function sendResetCode(phone, code) {
+  if (!SMS_WEBHOOK_URL) {
+    return RESET_CODE_EXPOSED
+      ? Promise.resolve()
+      : Promise.reject(new Error("sms service unavailable"));
+  }
+  return new Promise((resolve, reject) => {
+    const target = new URL(SMS_WEBHOOK_URL);
+    const body = Buffer.from(JSON.stringify({ phone, code, purpose: "password_reset", expiresInMinutes: 10 }));
+    const transport = target.protocol === "https:" ? https : http;
+    const request = transport.request(target, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": body.length,
+        ...(SMS_WEBHOOK_TOKEN ? { Authorization: `Bearer ${SMS_WEBHOOK_TOKEN}` } : {}),
+      },
+      timeout: 5000,
+    }, (response) => {
+      response.resume();
+      if (response.statusCode >= 200 && response.statusCode < 300) resolve();
+      else reject(new Error(`sms webhook returned ${response.statusCode}`));
+    });
+    request.on("timeout", () => request.destroy(new Error("sms webhook timeout")));
+    request.on("error", reject);
+    request.end(body);
+  });
+}
+
+function rotateAccountToken(oldToken, user) {
+  const newToken = makeToken();
+  users.delete(oldToken);
+  users.set(newToken, user);
+  for (const family of families.values()) {
+    for (const member of family.members.values()) {
+      if (member.accountToken === oldToken) member.accountToken = newToken;
+    }
+    for (const request of family.pendingBindRequests || []) {
+      if (request.accountToken === oldToken) request.accountToken = newToken;
+    }
+  }
+  return newToken;
 }
 
 function hashPassword(password, salt) {
@@ -477,15 +581,20 @@ const server = http.createServer(async (req, res) => {
       const phone = String(payload.phone || "").replace(/[^\d+]/g, "").trim();
       const password = String(payload.password || "");
       const name = String(payload.name || "").trim() || "亲友";
+      const limitKey = rateLimitKey(req, "register", phone);
+      if (isRateLimited(limitKey, 5)) {
+        sendJson(res, 429, { error: "too many account attempts" });
+        return;
+      }
       if (phone.length < 6 || phone.length > 18) {
         sendJson(res, 400, { error: "valid phone is required" });
         return;
       }
-      if (password.length < 6 || password.length > 64) {
-        sendJson(res, 400, { error: "password must be 6-64 characters" });
+      if (password.length < 8 || password.length > 64) {
+        sendJson(res, 400, { error: "password must be 8-64 characters" });
         return;
       }
-      const existing = [...users.entries()].find(([, user]) => user.phone === phone);
+      const existing = findUserByPhone(phone);
       if (existing) {
         sendJson(res, 409, { error: "phone is already registered" });
         return;
@@ -501,6 +610,7 @@ const server = http.createServer(async (req, res) => {
         lastLoginAt: nowIso,
       };
       users.set(accountToken, user);
+      clearRateLimit(limitKey);
       scheduleSave();
       sendJson(res, 200, { ok: true, accountToken, user: publicUser(user), memberships: [] });
       return;
@@ -510,6 +620,11 @@ const server = http.createServer(async (req, res) => {
       const payload = JSON.parse((await readBody(req)).toString("utf8"));
       const phone = String(payload.phone || "").replace(/[^\d+]/g, "").trim();
       const password = String(payload.password || "");
+      const limitKey = rateLimitKey(req, "login", phone);
+      if (isRateLimited(limitKey)) {
+        sendJson(res, 429, { error: "too many account attempts" });
+        return;
+      }
       if (phone.length < 6 || phone.length > 18) {
         sendJson(res, 400, { error: "valid phone is required" });
         return;
@@ -518,13 +633,14 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 400, { error: "valid password is required" });
         return;
       }
-      const existing = [...users.entries()].find(([, user]) => user.phone === phone);
+      const existing = findUserByPhone(phone);
       if (!existing || !verifyPassword(password, existing[1].passwordHash)) {
         sendJson(res, 403, { error: "invalid phone or password" });
         return;
       }
       const accountToken = existing[0];
       const user = existing[1];
+      clearRateLimit(limitKey);
       const nowIso = new Date().toISOString();
       user.lastLoginAt = nowIso;
       users.set(accountToken, user);
@@ -535,6 +651,127 @@ const server = http.createServer(async (req, res) => {
         user: publicUser(user),
         memberships: membershipsForAccount(accountToken),
       });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/account/password/reset/request") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const phone = String(payload.phone || "").replace(/[^\d+]/g, "").trim();
+      const limitKey = rateLimitKey(req, "reset-request", phone);
+      if (phone.length < 6 || phone.length > 18) {
+        sendJson(res, 400, { error: "valid phone is required" });
+        return;
+      }
+      if (isRateLimited(limitKey, 3, RESET_REQUEST_COOLDOWN_MS)) {
+        sendJson(res, 429, { error: "too many reset attempts" });
+        return;
+      }
+      const existing = findUserByPhone(phone);
+      if (existing) {
+        const code = makeResetCode();
+        const salt = crypto.randomBytes(12).toString("base64url");
+        existing[1].passwordReset = {
+          salt,
+          codeHash: hashResetCode(code, salt),
+          expiresAt: Date.now() + RESET_CODE_TTL_MS,
+          attempts: 0,
+        };
+        try {
+          await sendResetCode(phone, code);
+          scheduleSave();
+          sendJson(res, 200, {
+            ok: true,
+            message: "reset code sent",
+            ...(RESET_CODE_EXPOSED ? { debugCode: code } : {}),
+          });
+          return;
+        } catch (error) {
+          delete existing[1].passwordReset;
+          sendJson(res, 503, { error: "sms service unavailable" });
+          return;
+        }
+      }
+      sendJson(res, 200, { ok: true, message: "reset code sent" });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/account/password/reset/confirm") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const phone = String(payload.phone || "").replace(/[^\d+]/g, "").trim();
+      const code = String(payload.code || "").trim();
+      const password = String(payload.password || "");
+      const limitKey = rateLimitKey(req, "reset-confirm", phone);
+      if (isRateLimited(limitKey, RESET_MAX_ATTEMPTS, RESET_CODE_TTL_MS)) {
+        sendJson(res, 429, { error: "too many reset attempts" });
+        return;
+      }
+      if (password.length < 8 || password.length > 64) {
+        sendJson(res, 400, { error: "password must be 8-64 characters" });
+        return;
+      }
+      const existing = findUserByPhone(phone);
+      const reset = existing && existing[1].passwordReset;
+      const valid = reset
+        && Date.now() <= Number(reset.expiresAt || 0)
+        && reset.attempts < RESET_MAX_ATTEMPTS
+        && code.length === 6
+        && crypto.timingSafeEqual(
+          Buffer.from(hashResetCode(code, reset.salt)),
+          Buffer.from(String(reset.codeHash || ""))
+        );
+      if (!valid) {
+        if (reset) reset.attempts = Number(reset.attempts || 0) + 1;
+        scheduleSave();
+        sendJson(res, 403, { error: "invalid or expired reset code" });
+        return;
+      }
+      const oldToken = existing[0];
+      const user = existing[1];
+      user.passwordHash = hashPassword(password);
+      user.passwordChangedAt = new Date().toISOString();
+      delete user.passwordReset;
+      const accountToken = rotateAccountToken(oldToken, user);
+      clearRateLimit(limitKey);
+      scheduleSave();
+      sendJson(res, 200, {
+        ok: true,
+        accountToken,
+        user: publicUser(user),
+        memberships: membershipsForAccount(accountToken),
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/account/delete") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const accountToken = String(payload.accountToken || "").trim();
+      const password = String(payload.password || "");
+      const user = userForToken(accountToken);
+      if (!user || !verifyPassword(password, user.passwordHash)) {
+        sendJson(res, 403, { error: "invalid phone or password" });
+        return;
+      }
+      for (const [pairCode, family] of [...families.entries()]) {
+        const ownedElder = [...family.members.values()].some((member) =>
+          member.role === "elder" && member.accountToken === accountToken
+        );
+        if (ownedElder) {
+          resetSessionState(family);
+          families.delete(pairCode);
+          continue;
+        }
+        for (const [token, member] of [...family.members.entries()]) {
+          if (member.accountToken !== accountToken) continue;
+          if (family.activeHelperToken === token) resetSessionState(family);
+          family.members.delete(token);
+        }
+        family.pendingBindRequests = (family.pendingBindRequests || [])
+          .filter((item) => item.accountToken !== accountToken);
+        family.updatedAt = new Date().toISOString();
+      }
+      users.delete(accountToken);
+      await saveStateNow();
+      sendJson(res, 200, { ok: true });
       return;
     }
 

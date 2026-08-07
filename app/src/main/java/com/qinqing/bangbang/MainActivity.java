@@ -57,13 +57,13 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_CAPTURE = 2001;
     private static final int REQUEST_NOTIFICATIONS = 2002;
     private static final String PREFS = "family-assist";
-    private static final String DEFAULT_RELAY_URL = "http://47.238.240.30";
-    private static final String DEFAULT_PAIR_CODE = "family001";
+    private static final String DEFAULT_RELAY_URL = "https://47.238.240.30";
     private static final long FRESH_FRAME_MS = 2500;
     private static final long FAMILY_WAIT_POLL_MS = 1000;
     private static final long FAMILY_ACTIVE_POLL_MS = 520;
@@ -201,16 +201,15 @@ public class MainActivity extends Activity {
         }
     };
 
-    private static final int COLOR_BG = 0xFFF7F9FC;
+    private static final int COLOR_BG = 0xFFF5F8F6;
     private static final int COLOR_SURFACE = 0xFFFFFFFF;
-    private static final int COLOR_TEXT = 0xFF172033;
-    private static final int COLOR_MUTED = 0xFF64748B;
-    private static final int COLOR_LINE = 0xFFDDE4EE;
-    private static final int COLOR_BLUE = 0xFF2563EB;
-    private static final int COLOR_BLUE_DARK = 0xFF1D4ED8;
-    private static final int COLOR_GREEN = 0xFF12B981;
-    private static final int COLOR_RED = 0xFFDC2626;
-    private static final int COLOR_WARM = 0xFFFFF1E8;
+    private static final int COLOR_TEXT = 0xFF18231F;
+    private static final int COLOR_MUTED = 0xFF66736D;
+    private static final int COLOR_LINE = 0xFFDCE5E0;
+    private static final int COLOR_BLUE = 0xFF246B5D;
+    private static final int COLOR_BLUE_DARK = 0xFF145548;
+    private static final int COLOR_RED = 0xFFD64F45;
+    private static final int COLOR_WARM = 0xFFFFEEE8;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -218,7 +217,7 @@ public class MainActivity extends Activity {
         configureSystemBars();
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         baseUrl = migrateRelayUrl(prefs.getString("baseUrl", DEFAULT_RELAY_URL));
-        pairCode = prefs.getString("pairCode", DEFAULT_PAIR_CODE);
+        pairCode = prefs.getString("pairCode", "");
         displayName = prefs.getString("displayName", "妈妈");
         accountToken = prefs.getString("accountToken", "");
         accountPhone = prefs.getString("accountPhone", "");
@@ -381,14 +380,16 @@ public class MainActivity extends Activity {
         elderScreenVisible = false;
         root = verticalRoot();
 
-        root.addView(hero("亲情帮帮", isLoggedIn() ? "选择这台手机的使用方式" : "登录后，和家人安心连接"));
+        root.addView(appBrandHeader(isLoggedIn()
+                ? "今天需要谁来帮忙？"
+                : "远在身边，也能看懂每一步"));
         status = notice(bindingStatusText());
         status.setVisibility(View.GONE);
 
         if (!isLoggedIn()) {
-            LinearLayout accountCard = card("欢迎使用", "账号用于保护亲属绑定和协助记录。");
-            Button loginButton = primaryButton("登录");
-            Button registerButton = secondaryButton("注册新账号");
+            LinearLayout accountCard = card("安心连接家人", "看屏幕、画圈提示；经长辈同意后，还能远程操作。");
+            Button loginButton = primaryButton("手机号登录");
+            Button registerButton = textButton("第一次使用？创建账号");
             loginButton.setOnClickListener(v -> showLogin("home"));
             registerButton.setOnClickListener(v -> showRegister("home"));
             accountCard.addView(loginButton);
@@ -402,11 +403,11 @@ public class MainActivity extends Activity {
             elderButton.setOnClickListener(v -> showElder());
             familyButton.setOnClickListener(v -> showFamily());
 
-            LinearLayout elderCard = card("我需要帮助", "共享屏幕，请家人帮忙。");
+            LinearLayout elderCard = actionCard("我需要帮助", "向已绑定家人发起屏幕协助", COLOR_WARM);
             elderCard.addView(elderButton);
             root.addView(elderCard);
 
-            LinearLayout familyCard = card("我来帮长辈", "查看屏幕，画圈提示或远程协助。");
+            LinearLayout familyCard = actionCard("我来帮长辈", "查看长辈屏幕并给出清楚提示", 0xFFEEF3FF);
             familyCard.addView(familyButton);
             root.addView(familyCard);
         }
@@ -428,14 +429,13 @@ public class MainActivity extends Activity {
         status = notice("");
         status.setVisibility(View.GONE);
 
-        Button connectionButton = secondaryButton("连接设置");
-        Button accountButton = secondaryButton(isLoggedIn() ? "退出登录" : "登录");
-        Button registerButton = secondaryButton("注册新账号");
-        Button relativesButton = secondaryButton("亲属管理");
-        Button safetyButton = secondaryButton("安全与权限设置");
-        Button privacyButton = secondaryButton("隐私政策");
+        TextView accountButton = settingsRow(isLoggedIn() ? "退出登录" : "登录账号", isLoggedIn() ? "退出当前设备" : "使用手机号和密码登录");
+        TextView registerButton = settingsRow("注册新账号", "创建受保护的家庭账号");
+        TextView relativesButton = settingsRow("亲属管理", "邀请、添加或解绑亲属");
+        TextView safetyButton = settingsRow("安全与权限", "管理画圈、敏感保护和远程操作");
+        TextView privacyButton = settingsRow("隐私政策", "了解信息如何被使用和保护");
+        TextView deleteButton = settingsRow("注销账号", "永久删除账号和相关绑定");
 
-        connectionButton.setOnClickListener(v -> showAdvancedSettings());
         accountButton.setOnClickListener(v -> {
             if (isLoggedIn()) {
                 confirmLogout();
@@ -453,23 +453,27 @@ public class MainActivity extends Activity {
             }
         });
         privacyButton.setOnClickListener(v -> showPrivacyPolicy());
+        deleteButton.setOnClickListener(v -> showDeleteAccount());
 
-        LinearLayout settingsCard = card("设置", "");
+        LinearLayout settingsCard = card("账号与家庭", "");
         if (isLoggedIn()) {
-            root.addView(card("账号", "手机号：" + accountPhone + "\n称呼：" + displayName));
+            root.addView(profileSummary());
         }
-        settingsCard.addView(accountButton);
         if (!isLoggedIn()) {
+            settingsCard.addView(accountButton);
             settingsCard.addView(registerButton);
         } else {
             settingsCard.addView(relativesButton);
-            settingsCard.addView(connectionButton);
             settingsCard.addView(safetyButton);
         }
         settingsCard.addView(privacyButton);
+        if (isLoggedIn()) {
+            settingsCard.addView(accountButton);
+            settingsCard.addView(deleteButton);
+        }
         root.addView(settingsCard);
 
-        LinearLayout aboutCard = card("关于亲情帮帮", "版本 " + appVersionText());
+        LinearLayout aboutCard = card("亲情帮帮", "版本 " + appVersionText());
         root.addView(aboutCard);
         root.addView(status);
         root.addView(bottomNav("profile"));
@@ -484,6 +488,7 @@ public class MainActivity extends Activity {
         elderBindPolling = false;
         root = verticalRoot();
         root.addView(pageHeader("登录", this::navigateAfterAuthCancel));
+        root.addView(authBrandPanel("欢迎回来", "登录后继续连接你的家人"));
         status = notice("");
         status.setVisibility(View.GONE);
 
@@ -494,7 +499,8 @@ public class MainActivity extends Activity {
         passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         passwordInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
         Button loginButton = primaryButton("登录");
-        Button registerButton = textButton("还没有账号？注册");
+        Button forgotButton = textButton("忘记密码");
+        Button registerButton = textButton("还没有账号？立即注册");
         clearStatusOnFocus(phoneInput, passwordInput);
 
         loginButton.setOnClickListener(v -> loginAccount(
@@ -513,12 +519,14 @@ public class MainActivity extends Activity {
             return false;
         });
         registerButton.setOnClickListener(v -> showRegister(afterRole));
+        forgotButton.setOnClickListener(v -> showForgotPassword(afterRole, phoneInput.getText().toString().trim()));
 
         LinearLayout loginCard = card("", "");
         loginCard.addView(label("手机号"));
         loginCard.addView(phoneInput);
         loginCard.addView(label("密码"));
         loginCard.addView(passwordInput);
+        loginCard.addView(forgotButton);
         loginCard.addView(status);
         loginCard.addView(loginButton);
         loginCard.addView(registerButton);
@@ -534,6 +542,7 @@ public class MainActivity extends Activity {
         elderBindPolling = false;
         root = verticalRoot();
         root.addView(pageHeader("注册账号", this::navigateAfterAuthCancel));
+        root.addView(authBrandPanel("创建家庭账号", "绑定亲属前先确认彼此身份"));
         status = notice("");
         status.setVisibility(View.GONE);
 
@@ -560,6 +569,10 @@ public class MainActivity extends Activity {
 
         registerButton.setOnClickListener(v -> {
             String password = passwordInput.getText().toString();
+            if (password.length() < 8) {
+                setStatus("密码至少需要 8 位。");
+                return;
+            }
             if (!password.equals(confirmInput.getText().toString())) {
                 setStatus("两次输入的密码不一致。");
                 return;
@@ -592,7 +605,7 @@ public class MainActivity extends Activity {
         registerCard.addView(confirmInput);
         registerCard.addView(label("称呼"));
         registerCard.addView(nameInput);
-        registerCard.addView(caption("密码至少 6 位。"));
+        registerCard.addView(caption("请设置 8–64 位密码，建议包含字母和数字。"));
         registerCard.addView(privacyCheck);
         registerCard.addView(privacyButton);
         registerCard.addView(status);
@@ -600,6 +613,141 @@ public class MainActivity extends Activity {
         registerCard.addView(loginButton);
         root.addView(registerCard);
         setContentView(scroll(root));
+    }
+
+    private void showForgotPassword(String afterRole, String initialPhone) {
+        currentPage = "forgotPassword";
+        authReturnPage = afterRole == null ? "home" : afterRole;
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        elderBindPolling = false;
+        root = verticalRoot();
+        root.addView(pageHeader("找回密码", () -> showLogin(afterRole)));
+        root.addView(authBrandPanel("重新设置密码", "验证码会发送到注册手机号"));
+        status = notice("");
+        status.setVisibility(View.GONE);
+
+        EditText phoneInput = input("注册手机号", initialPhone == null ? "" : initialPhone);
+        phoneInput.setInputType(InputType.TYPE_CLASS_PHONE);
+        EditText codeInput = input("6 位验证码", "");
+        codeInput.setInputType(InputType.TYPE_CLASS_NUMBER);
+        EditText passwordInput = input("新密码", "");
+        passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        EditText confirmInput = input("再次输入新密码", "");
+        confirmInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        Button codeButton = secondaryButton("获取验证码");
+        Button resetButton = primaryButton("设置新密码");
+        clearStatusOnFocus(phoneInput, codeInput, passwordInput, confirmInput);
+
+        codeButton.setOnClickListener(v -> requestPasswordResetCode(phoneInput.getText().toString().trim(), codeButton));
+        resetButton.setOnClickListener(v -> {
+            String password = passwordInput.getText().toString();
+            if (!password.equals(confirmInput.getText().toString())) {
+                setStatus("两次输入的新密码不一致。");
+                return;
+            }
+            confirmPasswordReset(
+                    phoneInput.getText().toString().trim(),
+                    codeInput.getText().toString().trim(),
+                    password,
+                    afterRole,
+                    resetButton
+            );
+        });
+
+        LinearLayout form = card("验证手机号", "验证码 10 分钟内有效。");
+        form.addView(label("手机号"));
+        form.addView(phoneInput);
+        form.addView(codeButton);
+        form.addView(label("验证码"));
+        form.addView(codeInput);
+        form.addView(label("新密码"));
+        form.addView(passwordInput);
+        form.addView(label("确认新密码"));
+        form.addView(confirmInput);
+        form.addView(status);
+        form.addView(resetButton);
+        root.addView(form);
+        setContentView(scroll(root));
+    }
+
+    private void requestPasswordResetCode(String phone, Button sourceButton) {
+        if (!phone.matches("^\\+?[0-9]{6,18}$")) {
+            setStatus("请输入正确的注册手机号。");
+            return;
+        }
+        setButtonBusy(sourceButton, "正在发送...");
+        setStatus("");
+        statusIo.execute(() -> {
+            try {
+                NetworkClient.postJson(baseUrl, "/api/account/password/reset/request", new JSONObject().put("phone", phone));
+                main.post(() -> {
+                    setStatus("验证码已发送，请查看手机短信。");
+                    startCodeCountdown(sourceButton, 60);
+                });
+            } catch (Exception e) {
+                main.post(() -> {
+                    restoreButton(sourceButton);
+                    setStatus(friendlyError(e));
+                });
+            }
+        });
+    }
+
+    private void startCodeCountdown(Button button, int seconds) {
+        button.setTag(null);
+        button.setEnabled(false);
+        button.setAlpha(0.7f);
+        final int[] remaining = {seconds};
+        Runnable tick = new Runnable() {
+            @Override
+            public void run() {
+                if (remaining[0] <= 0 || !"forgotPassword".equals(currentPage)) {
+                    button.setText("重新获取验证码");
+                    button.setEnabled(true);
+                    button.setAlpha(1f);
+                    return;
+                }
+                button.setText(remaining[0] + " 秒后可重新获取");
+                remaining[0] -= 1;
+                main.postDelayed(this, 1000);
+            }
+        };
+        tick.run();
+    }
+
+    private void confirmPasswordReset(String phone, String code, String password, String afterRole, Button sourceButton) {
+        if (!phone.matches("^\\+?[0-9]{6,18}$")) {
+            setStatus("请输入正确的注册手机号。");
+            return;
+        }
+        if (!code.matches("^[0-9]{6}$")) {
+            setStatus("请输入短信中的 6 位验证码。");
+            return;
+        }
+        if (password.length() < 8 || password.length() > 64) {
+            setStatus("新密码需要 8–64 位。");
+            return;
+        }
+        setButtonBusy(sourceButton, "正在设置...");
+        statusIo.execute(() -> {
+            try {
+                JSONObject result = NetworkClient.postJson(baseUrl, "/api/account/password/reset/confirm", new JSONObject()
+                        .put("phone", phone)
+                        .put("code", code)
+                        .put("password", password));
+                saveAccountResult(result, phone, displayName);
+                main.post(() -> {
+                    showSetup();
+                    setStatus("密码已更新，你已安全登录。");
+                });
+            } catch (Exception e) {
+                main.post(() -> {
+                    restoreButton(sourceButton);
+                    setStatus(friendlyError(e));
+                });
+            }
+        });
     }
 
     private void showRegistrationPrivacyDialog() {
@@ -616,52 +764,73 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    private void showAdvancedSettings() {
-        currentPage = "settings";
+    private void showDeleteAccount() {
+        if (!isLoggedIn()) {
+            showLogin("profile");
+            return;
+        }
+        currentPage = "deleteAccount";
         familyPolling = false;
         elderAnnotationPolling = false;
         elderBindPolling = false;
-        elderScreenVisible = false;
         root = verticalRoot();
-        root.addView(pageHeader("连接设置", this::showProfile));
+        root.addView(pageHeader("注销账号", this::showProfile));
         status = notice("");
         status.setVisibility(View.GONE);
 
-        EditText serverInput = input("服务地址", baseUrl);
-        EditText nameInput = input("我的显示名称", displayName);
-        Button saveButton = primaryButton("保存设置");
-        Button testButton = secondaryButton("检查连接");
-        Button webRtcButton = secondaryButton(webRtcButtonText());
+        EditText passwordInput = input("请输入当前密码", "");
+        passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        CheckBox confirm = new CheckBox(this);
+        confirm.setText("我已了解账号、亲属绑定和协助记录将被永久删除");
+        confirm.setTextColor(COLOR_TEXT);
+        confirm.setTextSize(15);
+        confirm.setButtonTintList(android.content.res.ColorStateList.valueOf(COLOR_RED));
+        Button deleteButton = dangerButton("永久注销账号");
+        deleteButton.setOnClickListener(v -> {
+            if (!confirm.isChecked()) {
+                setStatus("请先确认你已了解注销影响。");
+                return;
+            }
+            if (passwordInput.getText().toString().isEmpty()) {
+                setStatus("请输入当前密码确认身份。");
+                return;
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle("确认永久注销？")
+                    .setMessage("注销后无法恢复。长辈账号创建的家庭关系也会同时删除。")
+                    .setPositiveButton("确认注销", (dialog, which) -> deleteAccount(passwordInput.getText().toString(), deleteButton))
+                    .setNegativeButton("取消", null)
+                    .show();
+        });
 
-        saveButton.setOnClickListener(v -> {
-            saveSetup(serverInput, nameInput);
-            setStatus("设置已保存。");
-        });
-        testButton.setOnClickListener(v -> {
-            saveSetup(serverInput, nameInput);
-            testRelayConnection(testButton);
-        });
-        webRtcButton.setOnClickListener(v -> {
-            boolean next = !prefs.getBoolean("webRtcEnabled", false);
-            prefs.edit().putBoolean("webRtcEnabled", next).apply();
-            webRtcButton.setText(webRtcButtonText());
-            setStatus(next
-                    ? "实时画面已开启。连接异常时会自动使用备用画面。"
-                    : "实时画面已关闭，当前使用备用画面。");
-        });
-
-        LinearLayout connectionCard = card("服务连接", "");
-        connectionCard.addView(label("服务地址"));
-        connectionCard.addView(serverInput);
-        connectionCard.addView(label("显示名称"));
-        connectionCard.addView(nameInput);
-        connectionCard.addView(saveButton);
-        connectionCard.addView(testButton);
-        connectionCard.addView(webRtcButton);
-        root.addView(connectionCard);
-        root.addView(status);
-        root.addView(bottomNav("profile"));
+        LinearLayout warning = card("注销后会发生什么", "账号资料、亲属绑定和服务端协助记录将被删除；当前协助也会立即结束。此操作无法撤销。");
+        warning.addView(label("当前密码"));
+        warning.addView(passwordInput);
+        warning.addView(confirm);
+        warning.addView(status);
+        warning.addView(deleteButton);
+        root.addView(warning);
         setContentView(scroll(root));
+    }
+
+    private void deleteAccount(String password, Button sourceButton) {
+        setButtonBusy(sourceButton, "正在注销...");
+        statusIo.execute(() -> {
+            try {
+                NetworkClient.postJson(baseUrl, "/api/account/delete", new JSONObject()
+                        .put("accountToken", accountToken)
+                        .put("password", password));
+                main.post(() -> {
+                    logoutLocal();
+                    setStatus("账号已注销，相关数据已删除。");
+                });
+            } catch (Exception e) {
+                main.post(() -> {
+                    restoreButton(sourceButton);
+                    setStatus(friendlyError(e));
+                });
+            }
+        });
     }
 
     private void showElder() {
@@ -861,16 +1030,31 @@ public class MainActivity extends Activity {
         root = verticalRoot();
         root.addView(pageHeader("隐私政策", this::showProfile));
 
-        LinearLayout summary = card("我们会处理哪些信息", "亲属绑定信息、协助会话状态、长辈主动授权后的屏幕画面、画圈提示、远程操作授权、操作审计和崩溃日志摘要。");
-        root.addView(summary);
-        root.addView(card("屏幕共享", "只有长辈点击求助并确认系统屏幕共享弹窗后，已绑定家属才能看到本次屏幕画面。协助结束后立即停止共享。"));
-        root.addView(card("远程操作", "默认不能远程点击。家属每次申请后，必须由长辈在本次协助中明确同意；协助结束后授权自动失效。"));
-        root.addView(card("敏感保护", "敏感页面保护默认开启。遇到验证码、支付、银行、密码等页面时，长辈可以开启遮罩，减少隐私暴露。"));
-        root.addView(card("权限用途", "屏幕录制用于共享画面；显示在其他应用上层用于画圈提示；无障碍服务用于敏感页面保护和长辈授权后的远程操作；通知用于提醒长辈处理重要请求。"));
-        root.addView(card("数据保留", "实时屏幕画面默认不保存。服务端会保留必要绑定关系、崩溃日志摘要和安全审计记录，用于保障账号安全、排查异常和防止滥用。"));
-        root.addView(card("安全边界", "未绑定不能协助；长辈未发起不能看屏幕；长辈未授权不能远程操作；同一时间只允许一名家属协助。"));
-        root.addView(card("用户权利", "你可以在应用内解绑家属，停止协助，关闭远程操作授权，并可通过应用市场页面联系开发者申请删除相关数据。"));
-        root.addView(card("联系我们", "如需帮助、反馈安全问题或申请删除个人信息，请通过应用市场页面联系开发者。"));
+        TextView policy = body(
+                "更新日期：2026 年 8 月 7 日\n"
+                        + "生效日期：2026 年 8 月 7 日\n\n"
+                        + "亲情帮帮隐私政策\n\n"
+                        + "亲情帮帮用于长辈与家属之间的手机协助。我们重视你的个人信息和操作安全，并遵循最少必要原则处理数据。\n\n"
+                        + "一、我们处理的信息\n"
+                        + "为提供账号和亲属绑定服务，我们处理手机号、账号称呼、加密后的密码、亲属关系和登录状态。密码不会以明文保存。\n\n"
+                        + "为提供协助服务，我们处理本次会话状态、画圈坐标、远程操作授权状态和必要的安全审计记录。屏幕画面仅在长辈主动发起并确认系统授权后实时传输，默认不保存。\n\n"
+                        + "为排查故障，我们可能处理设备型号、应用版本和崩溃日志摘要。日志不应包含密码或完整屏幕画面。\n\n"
+                        + "二、权限用途\n"
+                        + "屏幕录制权限用于共享长辈屏幕；悬浮窗权限用于显示家属发送的画圈提示；无障碍服务仅用于敏感页面保护和长辈当次明确同意后的远程操作；通知权限用于显示远程操作请求和协助结束提醒。\n\n"
+                        + "三、协助安全规则\n"
+                        + "未完成亲属绑定不能协助。长辈未主动发起时，家属不能查看屏幕。远程操作需要长辈每次明确授权，同一时间只允许一名家属协助，协助结束后授权立即失效。\n\n"
+                        + "四、数据保存与保护\n"
+                        + "账号密码使用带盐的单向算法保存，网络请求通过 HTTPS 加密传输。我们仅在实现服务、安全审计和故障排查所需期限内保存必要信息，并采取访问控制、限流和备份保护措施。\n\n"
+                        + "五、你的权利\n"
+                        + "你可以停止协助、撤销远程操作授权、解绑亲属、退出登录或在“我的 > 注销账号”中永久删除账号。注销后相关账号资料、亲属绑定和服务端记录将被删除且无法恢复。\n\n"
+                        + "六、联系我们\n"
+                        + "如需反馈隐私或安全问题，请通过应用市场中的开发者联系方式与我们联系。"
+        );
+        policy.setTextColor(COLOR_TEXT);
+        policy.setTextSize(16);
+        policy.setLineSpacing(dp(5), 1.0f);
+        policy.setPadding(dp(4), dp(4), dp(4), dp(20));
+        root.addView(policy);
 
         root.addView(bottomNav("profile"));
         setContentView(scroll(root));
@@ -982,31 +1166,22 @@ public class MainActivity extends Activity {
         root.addView(compactPageTitle("协助长辈"));
         status = stableNotice("连接正常");
         status.setVisibility(View.GONE);
-        boolean useWebRtc = isWebRtcEnabled();
         View screenView = buildFrameView();
 
         familyControlRequestButton = secondaryButton("请求远程操作授权");
         familyRemoteButton = secondaryButton("远程操作");
         familyEndButton = dangerButton("结束本次协助");
         familyChangeBindingButton = secondaryButton("绑定其他长辈");
-        Button refreshButton = primaryButton("立即刷新");
         familyControlRequestButton.setOnClickListener(v -> requestRemoteControl(familyControlRequestButton));
         familyRemoteButton.setOnClickListener(v -> showRemoteControlPanel());
         familyEndButton.setOnClickListener(v -> endFamilyAssistView());
         familyChangeBindingButton.setOnClickListener(v -> confirmChangeFamilyBinding());
-        refreshButton.setOnClickListener(v -> {
-            if (!refreshButton.isEnabled()) {
-                return;
-            }
-            temporarilyDisable(refreshButton, "刷新中...");
-            pollFamilyOnce();
-        });
 
         root.addView(status);
         familyWaitingView = card("等待求助", "长辈发起求助后，屏幕会自动显示。");
         familyWaitingTitle = (TextView) familyWaitingView.getChildAt(0);
         familyWaitingCaption = (TextView) familyWaitingView.getChildAt(1);
-        familyScreenLabelView = screenLabel(useWebRtc ? "长辈实时屏幕" : "长辈屏幕");
+        familyScreenLabelView = screenLabel("长辈实时屏幕");
         familyScreenSurface = screenSurface(screenView);
         familyFullscreenButton = fullscreenIconButton(R.drawable.ic_fullscreen, "全屏查看");
         familyFullscreenButton.setOnClickListener(v -> openFamilyFullscreen());
@@ -1018,9 +1193,6 @@ public class MainActivity extends Activity {
         root.addView(familyScreenSurface);
         familyActionBar = buildFamilyActionBar();
         setFamilySessionActive(false);
-        if (!useWebRtc) {
-            refreshButton.setVisibility(View.GONE);
-        }
         setContentView(familyPage(root, familyActionBar, bottomNav("family")));
         startFamilyPollLoop();
     }
@@ -1524,7 +1696,7 @@ public class MainActivity extends Activity {
         stopFamilyWebRtc();
         authToken = "";
         memberRole = "";
-        pairCode = DEFAULT_PAIR_CODE;
+        pairCode = "";
         prefs.edit()
                 .remove("authToken")
                 .remove("memberRole")
@@ -1655,18 +1827,7 @@ public class MainActivity extends Activity {
                     payload.put("name", finalName);
                 }
                 JSONObject result = NetworkClient.postJson(baseUrl, register ? "/api/account/register" : "/api/account/login", payload);
-                accountToken = result.optString("accountToken", "");
-                JSONObject user = result.optJSONObject("user");
-                accountPhone = user != null ? user.optString("phone", phone) : phone;
-                displayName = user != null ? user.optString("name", finalName) : finalName;
-                JSONArray memberships = result.optJSONArray("memberships");
-                accountMembershipsJson = memberships == null ? "[]" : memberships.toString();
-                prefs.edit()
-                        .putString("accountToken", accountToken)
-                        .putString("accountPhone", accountPhone)
-                        .putString("displayName", displayName)
-                        .putString("accountMemberships", accountMembershipsJson)
-                        .apply();
+                saveAccountResult(result, phone, finalName);
                 restoreMembershipForRole(afterRole);
                 main.post(() -> {
                     if ("elder".equals(afterRole)) {
@@ -1688,6 +1849,21 @@ public class MainActivity extends Activity {
                 });
             }
         });
+    }
+
+    private void saveAccountResult(JSONObject result, String fallbackPhone, String fallbackName) {
+        accountToken = result.optString("accountToken", "");
+        JSONObject user = result.optJSONObject("user");
+        accountPhone = user != null ? user.optString("phone", fallbackPhone) : fallbackPhone;
+        displayName = user != null ? user.optString("name", fallbackName) : fallbackName;
+        JSONArray memberships = result.optJSONArray("memberships");
+        accountMembershipsJson = memberships == null ? "[]" : memberships.toString();
+        prefs.edit()
+                .putString("accountToken", accountToken)
+                .putString("accountPhone", accountPhone)
+                .putString("displayName", displayName)
+                .putString("accountMemberships", accountMembershipsJson)
+                .apply();
     }
 
     private boolean restoreMembershipForRole(String role) {
@@ -2913,35 +3089,8 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    private void saveSetup(EditText serverInput, EditText nameInput) {
-        baseUrl = sanitizeRelayUrl(serverInput.getText().toString());
-        displayName = nameInput.getText().toString().trim();
-        if (displayName.isEmpty()) {
-            displayName = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
-        }
-        prefs.edit()
-                .putString("baseUrl", baseUrl)
-                .putString("displayName", displayName)
-                .apply();
-    }
-
-    private void testRelayConnection(Button sourceButton) {
-        setButtonBusy(sourceButton, "检查中...");
-        setStatus("正在检查连接...");
-        statusIo.execute(() -> {
-            try {
-                NetworkClient.getJson(baseUrl, "/health");
-                main.post(() -> setStatus("连接服务正常"));
-            } catch (Exception e) {
-                main.post(() -> setStatus("连接检查失败：" + friendlyError(e)));
-            } finally {
-                main.post(() -> restoreButton(sourceButton));
-            }
-        });
-    }
-
     private String friendlyError(Exception e) {
-        String message = e == null || e.getMessage() == null ? "" : e.getMessage().toLowerCase();
+        String message = e == null || e.getMessage() == null ? "" : e.getMessage().toLowerCase(Locale.ROOT);
         if (message.contains("invalid phone or password")) {
             return "手机号或密码不正确。";
         }
@@ -2952,7 +3101,16 @@ public class MainActivity extends Activity {
             return "请输入正确的手机号。";
         }
         if (message.contains("valid password is required") || message.contains("password must be")) {
-            return "密码需要 6–64 位。";
+            return "密码需要 8–64 位。";
+        }
+        if (message.contains("invalid or expired reset code")) {
+            return "验证码不正确或已过期，请重新获取。";
+        }
+        if (message.contains("sms service unavailable")) {
+            return "短信服务暂时不可用，请稍后再试。";
+        }
+        if (message.contains("too many reset attempts")) {
+            return "尝试次数较多，请稍后再试。";
         }
         if (message.contains("invalid or expired invite code")) {
             return "绑定码不正确或已过期，请让长辈重新生成。";
@@ -3102,10 +3260,6 @@ public class MainActivity extends Activity {
         if (!prefs.contains("remoteControlAllowed")) {
             editor.putBoolean("remoteControlAllowed", false);
         }
-        if (!prefs.getBoolean("webRtcAutoDefaultV2", false)) {
-            editor.putBoolean("webRtcEnabled", true);
-            editor.putBoolean("webRtcAutoDefaultV2", true);
-        }
         editor.apply();
     }
 
@@ -3115,7 +3269,7 @@ public class MainActivity extends Activity {
             return false;
         }
         String serviceName = getPackageName() + "/" + SensitiveAccessibilityService.class.getName();
-        return enabled.toLowerCase().contains(serviceName.toLowerCase());
+        return enabled.toLowerCase(Locale.ROOT).contains(serviceName.toLowerCase(Locale.ROOT));
     }
 
     private void allowRemoteControl(boolean allowed) {
@@ -3160,7 +3314,7 @@ public class MainActivity extends Activity {
     }
 
     private String accessibilityGuideText() {
-        String brand = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase();
+        String brand = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase(Locale.ROOT);
         String common = "接下来会打开系统设置。请找到“亲情帮帮”，打开开关，然后按返回键回到这里。";
         if (brand.contains("vivo")) {
             return common + "\n\nvivo 常见位置：无障碍 > 已下载的服务 > 亲情帮帮 > 开启。";
@@ -3198,7 +3352,7 @@ public class MainActivity extends Activity {
     }
 
     private String accessibilityListFallbackText() {
-        String brand = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase();
+        String brand = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase(Locale.ROOT);
         if (brand.contains("vivo")) {
             return "系统没有开放直达开关页。请点“亲情帮帮”，打开开关后按返回键。";
         }
@@ -3212,6 +3366,9 @@ public class MainActivity extends Activity {
     }
 
     private String migrateRelayUrl(String value) {
+        if (value != null && value.startsWith("http://47.238.240.30")) {
+            value = DEFAULT_RELAY_URL;
+        }
         String normalized = sanitizeRelayUrl(value);
         prefs.edit().putString("baseUrl", normalized).apply();
         return normalized;
@@ -3229,6 +3386,7 @@ public class MainActivity extends Activity {
                 || normalized.contains("10.0.2.2")
                 || normalized.contains("127.0.0.1")
                 || normalized.contains("localhost")
+                || normalized.startsWith("http://")
                 || (normalized.contains(".github.dev") && !normalized.contains(".app.github.dev"))) {
             normalized = DEFAULT_RELAY_URL;
         }
@@ -3294,11 +3452,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean isWebRtcEnabled() {
-        return prefs.getBoolean("webRtcEnabled", false);
-    }
-
-    private String webRtcButtonText() {
-        return isWebRtcEnabled() ? "实时画面：已开启" : "实时画面：已关闭";
+        return true;
     }
 
     private String elderPrimaryButtonText() {
@@ -3622,6 +3776,108 @@ public class MainActivity extends Activity {
         return layout;
     }
 
+    private LinearLayout appBrandHeader(String message) {
+        LinearLayout layout = horizontalRow();
+        layout.setGravity(Gravity.CENTER_VERTICAL);
+        layout.setPadding(dp(4), dp(8), dp(4), dp(14));
+
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.mipmap.ic_launcher);
+        logo.setContentDescription("亲情帮帮");
+        layout.addView(logo, new LinearLayout.LayoutParams(dp(64), dp(64)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView name = sectionTitle("亲情帮帮");
+        name.setTextSize(25);
+        TextView messageView = caption(message);
+        messageView.setPadding(0, 0, 0, 0);
+        copy.addView(name);
+        copy.addView(messageView);
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        copyParams.setMargins(dp(12), 0, 0, 0);
+        layout.addView(copy, copyParams);
+        return layout;
+    }
+
+    private LinearLayout authBrandPanel(String heading, String message) {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(dp(16), dp(14), dp(16), dp(14));
+        panel.setBackground(rounded(0xFFEAF3F0, dp(8), 0xFFCFE1DB));
+        LinearLayout.LayoutParams params = fullWidthParams();
+        params.setMargins(0, 0, 0, dp(12));
+        panel.setLayoutParams(params);
+        TextView headingView = sectionTitle(heading);
+        headingView.setTextColor(COLOR_BLUE_DARK);
+        TextView messageView = caption(message + "\n看屏幕  ·  画圈提示  ·  授权后远程操作");
+        messageView.setTextColor(0xFF45645B);
+        messageView.setPadding(0, 0, 0, 0);
+        panel.addView(headingView);
+        panel.addView(messageView);
+        return panel;
+    }
+
+    private LinearLayout actionCard(String heading, String message, int tint) {
+        LinearLayout layout = card(heading, message);
+        layout.setBackground(rounded(tint, dp(8), Color.TRANSPARENT));
+        return layout;
+    }
+
+    private TextView settingsRow(String heading, String message) {
+        TextView row = new TextView(this);
+        row.setText(heading + "\n" + message);
+        row.setTextColor(COLOR_TEXT);
+        row.setTextSize(16);
+        row.setLineSpacing(dp(3), 1f);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setCompoundDrawablesWithIntrinsicBounds(0, 0, R.drawable.ic_arrow_forward, 0);
+        row.setCompoundDrawablePadding(dp(8));
+        row.setPadding(dp(2), dp(12), dp(2), dp(12));
+        row.setBackgroundColor(Color.TRANSPARENT);
+        row.setClickable(true);
+        row.setFocusable(true);
+        row.setLayoutParams(fullWidthParams());
+        return row;
+    }
+
+    private LinearLayout profileSummary() {
+        LinearLayout summary = horizontalRow();
+        summary.setGravity(Gravity.CENTER_VERTICAL);
+        summary.setPadding(dp(14), dp(14), dp(14), dp(14));
+        summary.setBackground(rounded(COLOR_SURFACE, dp(8), COLOR_LINE));
+        LinearLayout.LayoutParams params = fullWidthParams();
+        params.setMargins(0, 0, 0, dp(10));
+        summary.setLayoutParams(params);
+
+        TextView avatar = new TextView(this);
+        String initial = displayName == null || displayName.isEmpty() ? "亲" : displayName.substring(0, 1);
+        avatar.setText(initial);
+        avatar.setTextSize(22);
+        avatar.setTextColor(Color.WHITE);
+        avatar.setTypeface(Typeface.DEFAULT_BOLD);
+        avatar.setGravity(Gravity.CENTER);
+        avatar.setBackground(rounded(COLOR_BLUE, dp(8), COLOR_BLUE));
+        summary.addView(avatar, new LinearLayout.LayoutParams(dp(52), dp(52)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView name = sectionTitle(displayName);
+        TextView phone = caption(maskedPhone(accountPhone));
+        phone.setPadding(0, 0, 0, 0);
+        copy.addView(name);
+        copy.addView(phone);
+        LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        copyParams.setMargins(dp(12), 0, 0, 0);
+        summary.addView(copy, copyParams);
+        return summary;
+    }
+
+    private String maskedPhone(String phone) {
+        if (phone == null || phone.length() < 7) return phone == null ? "" : phone;
+        return phone.substring(0, 3) + "****" + phone.substring(phone.length() - 4);
+    }
+
     private TextView compactPageTitle(String heading) {
         TextView title = sectionTitle(heading);
         title.setTextSize(22);
@@ -3825,15 +4081,6 @@ public class MainActivity extends Activity {
         if (Color.alpha(strokeColor) != 0) {
             drawable.setStroke(dp(1), strokeColor);
         }
-        return drawable;
-    }
-
-    private GradientDrawable gradientHero() {
-        GradientDrawable drawable = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFFFF7A59, 0xFFFF5F7E, 0xFF2F80ED}
-        );
-        drawable.setCornerRadius(dp(24));
         return drawable;
     }
 
