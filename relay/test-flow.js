@@ -4,7 +4,7 @@ const port = 8796;
 const baseUrl = `http://127.0.0.1:${port}`;
 const relay = spawn(process.execPath, ["server.js"], {
   cwd: __dirname,
-  env: { ...process.env, PORT: String(port) },
+  env: { ...process.env, HOST: "127.0.0.1", PORT: String(port) },
   stdio: ["ignore", "pipe", "inherit"],
 });
 

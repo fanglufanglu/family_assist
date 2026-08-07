@@ -2,19 +2,36 @@
 
 ## 连接与性能
 
-- 使用正式 relay 服务，不使用 Codespaces 或临时隧道。
-- 配置稳定 TURN 服务，并通过 `/api/ice-config` 下发 STUN/TURN。
+- 使用正式 relay 服务，不使用 Codespaces 或临时隧道。当前正式验证地址：`http://47.238.240.30`。
+- 配置稳定 TURN 服务，并通过 `/api/ice-config` 下发 STUN/TURN。当前使用香港 ECS 自建 coturn。
 - WebRTC 失败时要自动降级到截图协助，并让长辈端同步切换。
 - 家属端必须能在 3 秒内看到协助状态变化。
 - 停止协助后，家属端必须在 2 秒内退出旧会话。
+- 服务端必须使用 systemd 常驻、Nginx 反代、日志轮转和健康检查脚本。
 
 ## 安全与风控
 
 - 亲属绑定支持解绑、重新绑定、设备变更提醒。
 - 远程点击必须每次协助单独授权。
 - relay 保存远程控制审计记录。
+- relay 对远程操作申请、点击、滑动、返回等动作进行频率限制。
 - 敏感页面默认遮罩，支付、验证码、银行、密码页需要重点验证。
 - 增加异常会话清理：服务崩溃、网络断开、长时间无家属连接。
+- 服务重启后不得恢复旧屏幕共享会话，只保留亲属绑定和审计记录。
+
+## 数据持久化
+
+- 当前 relay 使用无额外依赖的本地 JSON 状态文件，路径：`/var/lib/family-assist-relay/relay-state.json`。
+- 持久化内容：亲属绑定、绑定码状态、审计记录、崩溃日志摘要。
+- 不持久化内容：实时屏幕画面、WebRTC 信令会话、远程操作临时指令。
+- 用户增长后迁移到 PostgreSQL/MySQL。
+
+## 阿里云运维
+
+- 部署脚本：`scripts/install-aliyun-production.sh`。
+- 巡检脚本：`scripts/check-aliyun-production.sh`。
+- 运维说明：`ALIYUN_PRODUCTION.md`。
+- 安全组：保留 80、443、3478、49152-65535/UDP；SSH 限制为管理员 IP；删除 3389。
 
 ## Android 品牌适配
 

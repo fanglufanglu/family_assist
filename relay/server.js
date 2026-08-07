@@ -1,15 +1,34 @@
 const http = require("http");
+const fs = require("fs");
+const path = require("path");
 const { URL } = require("url");
 const crypto = require("crypto");
 
 const port = Number(process.env.PORT || 8787);
+const host = process.env.HOST || "0.0.0.0";
 const families = new Map();
 const MAX_FAMILY_MEMBERS = 5;
+const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES || 8 * 1024 * 1024);
+const DATA_DIR = process.env.RELAY_DATA_DIR || path.join(__dirname, "..", ".data");
+const STATE_FILE = process.env.RELAY_STATE_FILE || path.join(DATA_DIR, "relay-state.json");
+const SAVE_DEBOUNCE_MS = 250;
+const CONTROL_REQUEST_COOLDOWN_MS = 15_000;
+const CONTROL_ACTION_COOLDOWN_MS = 120;
+let saveTimer = null;
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (chunk) => chunks.push(chunk));
+    let total = 0;
+    req.on("data", (chunk) => {
+      total += chunk.length;
+      if (total > MAX_BODY_BYTES) {
+        reject(new Error("request body is too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -37,41 +56,47 @@ function logRequest(req, res, startedAt) {
 
 function familyFor(pairCode) {
   if (!families.has(pairCode)) {
-    families.set(pairCode, {
-      sessionId: "",
-      inviteCode: "",
-      inviteExpiresAt: 0,
-      members: new Map(),
-      active: false,
-      elderName: "",
-      deviceName: "",
-      updatedAt: "",
-      frame: null,
-      frameUpdatedAt: "",
-      lastFamilySeenAtMs: 0,
-      lastFamilySeenAt: "",
-      masked: false,
-      annotation: null,
-      controlRequested: false,
-      controlAllowed: false,
-      controlDecision: "idle",
-      controlReason: "",
-      controlUpdatedAt: "",
-      controlAction: null,
-      activeHelperToken: "",
-      activeHelperName: "",
-      audit: [],
-      crashes: [],
-      webrtc: {
-        offer: null,
-        answer: null,
-        elderIce: [],
-        familyIce: [],
-        updatedAt: "",
-      },
-    });
+    families.set(pairCode, newFamily());
   }
   return families.get(pairCode);
+}
+
+function newFamily() {
+  return {
+    sessionId: "",
+    inviteCode: "",
+    inviteExpiresAt: 0,
+    members: new Map(),
+    active: false,
+    elderName: "",
+    deviceName: "",
+    updatedAt: "",
+    frame: null,
+    frameUpdatedAt: "",
+    lastFamilySeenAtMs: 0,
+    lastFamilySeenAt: "",
+    masked: false,
+    annotation: null,
+    controlRequested: false,
+    controlAllowed: false,
+    controlDecision: "idle",
+    controlReason: "",
+    controlUpdatedAt: "",
+    controlAction: null,
+    lastControlRequestAtMs: 0,
+    lastControlActionAtMs: 0,
+    activeHelperToken: "",
+    activeHelperName: "",
+    audit: [],
+    crashes: [],
+    webrtc: {
+      offer: null,
+      answer: null,
+      elderIce: [],
+      familyIce: [],
+      updatedAt: "",
+    },
+  };
 }
 
 function makeToken() {
@@ -162,6 +187,7 @@ function audit(family, type, detail) {
   if (family.audit.length > 200) {
     family.audit.splice(0, family.audit.length - 200);
   }
+  scheduleSave();
 }
 
 function rememberCrash(family, payload, member) {
@@ -177,7 +203,121 @@ function rememberCrash(family, payload, member) {
   if (family.crashes.length > 50) {
     family.crashes.splice(0, family.crashes.length - 50);
   }
+  scheduleSave();
 }
+
+function clamp01(value, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(0, Math.min(1, number));
+}
+
+function serializeFamily(family) {
+  return {
+    ...family,
+    frame: null,
+    annotation: null,
+    controlAction: null,
+    active: false,
+    sessionId: "",
+    activeHelperToken: "",
+    activeHelperName: "",
+    members: [...family.members.entries()],
+    webrtc: {
+      offer: null,
+      answer: null,
+      elderIce: [],
+      familyIce: [],
+      updatedAt: family.webrtc && family.webrtc.updatedAt ? family.webrtc.updatedAt : "",
+    },
+  };
+}
+
+function hydrateFamily(raw) {
+  const family = { ...newFamily(), ...(raw || {}) };
+  family.members = new Map(Array.isArray(raw && raw.members) ? raw.members : []);
+  family.frame = null;
+  family.annotation = null;
+  family.controlAction = null;
+  family.active = false;
+  family.sessionId = "";
+  family.activeHelperToken = "";
+  family.activeHelperName = "";
+  family.webrtc = {
+    offer: null,
+    answer: null,
+    elderIce: [],
+    familyIce: [],
+    updatedAt: "",
+  };
+  return family;
+}
+
+function loadState() {
+  try {
+    if (!fs.existsSync(STATE_FILE)) return;
+    const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    const entries = Array.isArray(parsed.families) ? parsed.families : [];
+    for (const [pairCode, rawFamily] of entries) {
+      if (pairCode) families.set(pairCode, hydrateFamily(rawFamily));
+    }
+    console.log(`Loaded ${families.size} persisted families from ${STATE_FILE}`);
+  } catch (error) {
+    console.error(`Failed to load relay state: ${error.message}`);
+  }
+}
+
+function saveStateNow() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+    const payload = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      families: [...families.entries()].map(([pairCode, family]) => [pairCode, serializeFamily(family)]),
+    };
+    const tempFile = `${STATE_FILE}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(payload, null, 2), { mode: 0o600 });
+    fs.renameSync(tempFile, STATE_FILE);
+  } catch (error) {
+    console.error(`Failed to save relay state: ${error.message}`);
+  }
+}
+
+function scheduleSave() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    saveStateNow();
+  }, SAVE_DEBOUNCE_MS);
+}
+
+function resetSessionState(family) {
+  family.active = false;
+  family.sessionId = "";
+  family.annotation = null;
+  family.frame = null;
+  family.frameUpdatedAt = "";
+  family.controlAllowed = false;
+  family.controlRequested = false;
+  family.controlDecision = "idle";
+  family.controlReason = "";
+  family.controlAction = null;
+  family.lastFamilySeenAtMs = 0;
+  family.lastFamilySeenAt = "";
+  family.activeHelperToken = "";
+  family.activeHelperName = "";
+  family.updatedAt = new Date().toISOString();
+  family.webrtc = {
+    offer: null,
+    answer: null,
+    elderIce: [],
+    familyIce: [],
+    updatedAt: family.updatedAt,
+  };
+  scheduleSave();
+}
+
+loadState();
 
 const server = http.createServer(async (req, res) => {
   const startedAt = Date.now();
@@ -246,6 +386,7 @@ const server = http.createServer(async (req, res) => {
         deviceId: String(payload.deviceId || ""),
         createdAt: family.updatedAt,
       });
+      audit(family, "invite_created", { elderName: family.elderName, familyMemberCount: familyMembers(family).length });
       sendJson(res, 200, {
         ok: true,
         inviteCode: family.inviteCode,
@@ -411,21 +552,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { ok: true, stale: true });
         return;
       }
-      result.family.active = false;
-      result.family.sessionId = "";
-      result.family.annotation = null;
-      result.family.frame = null;
-      result.family.frameUpdatedAt = "";
-      result.family.controlAllowed = false;
-      result.family.controlRequested = false;
-      result.family.controlDecision = "idle";
-      result.family.controlReason = "";
-      result.family.controlAction = null;
-      result.family.lastFamilySeenAtMs = 0;
-      result.family.lastFamilySeenAt = "";
-      result.family.activeHelperToken = "";
-      result.family.activeHelperName = "";
-      result.family.updatedAt = new Date().toISOString();
+      resetSessionState(result.family);
       audit(result.family, "help_ended", { sessionId });
       sendJson(res, 200, { ok: true });
       return;
@@ -443,19 +570,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { ok: true, stale: true });
         return;
       }
-      result.family.active = false;
-      result.family.sessionId = "";
-      result.family.annotation = null;
-      result.family.frame = null;
-      result.family.frameUpdatedAt = "";
-      result.family.controlAllowed = false;
-      result.family.controlRequested = false;
-      result.family.controlDecision = "idle";
-      result.family.controlReason = "";
-      result.family.controlAction = null;
-      result.family.activeHelperToken = "";
-      result.family.activeHelperName = "";
-      result.family.updatedAt = new Date().toISOString();
+      resetSessionState(result.family);
       audit(result.family, "family_left", { sessionId, by: result.member.name });
       sendJson(res, 200, { ok: true, family: publicFamily(result.family, result.member, authToken) });
       return;
@@ -468,6 +583,13 @@ const server = http.createServer(async (req, res) => {
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
       if (!requireActiveHelper(res, result, authToken)) return;
+      const now = Date.now();
+      const elapsed = now - Number(result.family.lastControlRequestAtMs || 0);
+      if (result.family.controlDecision === "pending" && elapsed < CONTROL_REQUEST_COOLDOWN_MS) {
+        sendJson(res, 429, { error: "control request is too frequent", retryAfterMs: CONTROL_REQUEST_COOLDOWN_MS - elapsed });
+        return;
+      }
+      result.family.lastControlRequestAtMs = now;
       result.family.controlRequested = true;
       result.family.controlAllowed = false;
       result.family.controlDecision = "pending";
@@ -510,11 +632,17 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 403, { error: "control is not allowed" });
         return;
       }
+      const now = Date.now();
+      if (now - Number(result.family.lastControlActionAtMs || 0) < CONTROL_ACTION_COOLDOWN_MS) {
+        sendJson(res, 429, { error: "control action is too frequent" });
+        return;
+      }
+      result.family.lastControlActionAtMs = now;
       result.family.controlAction = {
         id: crypto.randomBytes(8).toString("hex"),
         type: "tap",
-        x: Number(payload.x || 0),
-        y: Number(payload.y || 0),
+        x: clamp01(payload.x, 0.5),
+        y: clamp01(payload.y, 0.5),
         updatedAt: new Date().toISOString(),
         expiresAt: Date.now() + 3000,
       };
@@ -534,14 +662,20 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 403, { error: "control is not allowed" });
         return;
       }
+      const now = Date.now();
+      if (now - Number(result.family.lastControlActionAtMs || 0) < CONTROL_ACTION_COOLDOWN_MS) {
+        sendJson(res, 429, { error: "control action is too frequent" });
+        return;
+      }
+      result.family.lastControlActionAtMs = now;
       result.family.controlAction = {
         id: crypto.randomBytes(8).toString("hex"),
         type: "swipe",
-        startX: Number(payload.startX || 0.5),
-        startY: Number(payload.startY || 0.5),
-        endX: Number(payload.endX || 0.5),
-        endY: Number(payload.endY || 0.5),
-        durationMs: Number(payload.durationMs || 350),
+        startX: clamp01(payload.startX, 0.5),
+        startY: clamp01(payload.startY, 0.5),
+        endX: clamp01(payload.endX, 0.5),
+        endY: clamp01(payload.endY, 0.5),
+        durationMs: Math.max(120, Math.min(1200, Number(payload.durationMs || 350))),
         updatedAt: new Date().toISOString(),
         expiresAt: Date.now() + 6000,
       };
@@ -566,6 +700,12 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 403, { error: "control is not allowed" });
         return;
       }
+      const now = Date.now();
+      if (now - Number(result.family.lastControlActionAtMs || 0) < CONTROL_ACTION_COOLDOWN_MS) {
+        sendJson(res, 429, { error: "control action is too frequent" });
+        return;
+      }
+      result.family.lastControlActionAtMs = now;
       const action = String(payload.action || "").trim();
       if (!["home", "back", "recents"].includes(action)) {
         sendJson(res, 400, { error: "unsupported global action" });
@@ -719,6 +859,7 @@ const server = http.createServer(async (req, res) => {
       family.masked = masked;
       family.frameUpdatedAt = new Date().toISOString();
       family.updatedAt = family.frameUpdatedAt;
+      scheduleSave();
       res.writeHead(204, { "Access-Control-Allow-Origin": "*" });
       res.end();
       return;
@@ -761,15 +902,16 @@ const server = http.createServer(async (req, res) => {
       result.family.annotation = {
         id: crypto.randomBytes(8).toString("hex"),
         type: "circle",
-        x: Number(payload.x || 0),
-        y: Number(payload.y || 0),
-        radius: Number(payload.radius || 0.08),
+        x: clamp01(payload.x, 0.5),
+        y: clamp01(payload.y, 0.5),
+        radius: Math.max(0.03, Math.min(0.18, Number(payload.radius || 0.08))),
         label: String(payload.label || "请点这里"),
         frameUpdatedAt: String(payload.frameUpdatedAt || ""),
         updatedAt: new Date().toISOString(),
         sessionId,
         expiresAt: Date.now() + 8000,
       };
+      audit(result.family, "annotation_sent", { x: result.family.annotation.x, y: result.family.annotation.y });
       sendJson(res, 200, { ok: true, annotation: result.family.annotation });
       return;
     }
@@ -813,6 +955,20 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, "0.0.0.0", () => {
-  console.log(`Family Assist relay listening on http://0.0.0.0:${port}`);
+server.listen(port, host, () => {
+  console.log(`Family Assist relay listening on http://${host}:${port}`);
 });
+
+function shutdown(signal) {
+  console.log(`Received ${signal}, saving relay state before exit.`);
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  saveStateNow();
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 2000).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));

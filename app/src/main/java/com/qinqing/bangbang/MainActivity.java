@@ -58,7 +58,7 @@ public class MainActivity extends Activity {
     private static final int REQUEST_CAPTURE = 2001;
     private static final int REQUEST_NOTIFICATIONS = 2002;
     private static final String PREFS = "family-assist";
-    private static final String DEFAULT_RELAY_URL = "https://super-duper-funicular-44776x6g7hjvwj-8787.app.github.dev";
+    private static final String DEFAULT_RELAY_URL = "http://47.238.240.30";
     private static final String DEFAULT_PAIR_CODE = "family001";
     private static final long FRESH_FRAME_MS = 2500;
     private static final long FAMILY_WAIT_POLL_MS = 1000;
@@ -660,12 +660,16 @@ public class MainActivity extends Activity {
         root = verticalRoot();
         root.addView(pageHeader("隐私政策", this::showProfile));
 
-        LinearLayout summary = card("我们会处理哪些信息", "亲属绑定信息、协助会话状态、长辈主动授权后的屏幕画面、远程点击授权和操作审计。屏幕内容仅用于本次亲属协助。");
+        LinearLayout summary = card("我们会处理哪些信息", "亲属绑定信息、协助会话状态、长辈主动授权后的屏幕画面、画圈提示、远程操作授权、操作审计和崩溃日志摘要。");
         root.addView(summary);
-        root.addView(card("权限用途", "屏幕录制用于共享画面；显示在其他应用上层用于画圈提示；无障碍服务用于敏感页面保护和长辈授权后的远程点击；通知用于提醒长辈处理授权请求。"));
-        root.addView(card("安全边界", "未绑定不能查看屏幕；长辈不主动发起不能查看屏幕；长辈未授权不能远程点击；协助结束后远程点击会自动关闭。"));
-        root.addView(card("数据保留", "协助画面默认不保存；会话结束后停止传输。必要的安全审计记录仅用于保障账号与操作安全。"));
-        root.addView(card("联系我们", "如需帮助或申请删除个人信息，请通过应用市场页面联系开发者。"));
+        root.addView(card("屏幕共享", "只有长辈点击求助并确认系统屏幕共享弹窗后，已绑定家属才能看到本次屏幕画面。协助结束后立即停止共享。"));
+        root.addView(card("远程操作", "默认不能远程点击。家属每次申请后，必须由长辈在本次协助中明确同意；协助结束后授权自动失效。"));
+        root.addView(card("敏感保护", "敏感页面保护默认开启。遇到验证码、支付、银行、密码等页面时，长辈可以开启遮罩，减少隐私暴露。"));
+        root.addView(card("权限用途", "屏幕录制用于共享画面；显示在其他应用上层用于画圈提示；无障碍服务用于敏感页面保护和长辈授权后的远程操作；通知用于提醒长辈处理重要请求。"));
+        root.addView(card("数据保留", "实时屏幕画面默认不保存。服务端会保留必要绑定关系、崩溃日志摘要和安全审计记录，用于保障账号安全、排查异常和防止滥用。"));
+        root.addView(card("安全边界", "未绑定不能协助；长辈未发起不能看屏幕；长辈未授权不能远程操作；同一时间只允许一名家属协助。"));
+        root.addView(card("用户权利", "你可以在应用内解绑家属，停止协助，关闭远程操作授权，并可通过应用市场页面联系开发者申请删除相关数据。"));
+        root.addView(card("联系我们", "如需帮助、反馈安全问题或申请删除个人信息，请通过应用市场页面联系开发者。"));
 
         root.addView(bottomNav("profile"));
         setContentView(scroll(root));
