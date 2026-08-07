@@ -312,7 +312,9 @@ public class MainActivity extends Activity {
             closeFamilyFullscreen();
         } else if ("home".equals(currentPage)) {
             super.onBackPressed();
-        } else if ("settings".equals(currentPage) || "privacy".equals(currentPage) || "relatives".equals(currentPage) || "login".equals(currentPage)) {
+        } else if ("login".equals(currentPage) || "register".equals(currentPage)) {
+            showSetup();
+        } else if ("settings".equals(currentPage) || "privacy".equals(currentPage) || "relatives".equals(currentPage)) {
             showProfile();
         } else if ("familyBindPending".equals(currentPage)) {
             showFamilyBind();
@@ -377,27 +379,33 @@ public class MainActivity extends Activity {
         status = notice(bindingStatusText());
         status.setVisibility(View.GONE);
 
-        Button elderButton = primaryButton("我是长辈");
-        elderButton.setTextSize(23);
-        Button familyButton = secondaryButton("我是家属");
-        familyButton.setTextSize(22);
-        elderButton.setOnClickListener(v -> {
-            if (ensureLoggedIn("elder")) showElder();
-        });
-        familyButton.setOnClickListener(v -> {
-            if (ensureLoggedIn("family")) showFamily();
-        });
-
-        LinearLayout elderCard = card("长辈手机", "需要帮助时，向家人发起求助。");
-        elderCard.addView(elderButton);
-        root.addView(elderCard);
-
-        LinearLayout familyCard = card("家属手机", "接收求助，查看屏幕并提供提示。");
-        familyCard.addView(familyButton);
-        root.addView(familyCard);
-
         if (!isLoggedIn()) {
-            root.addView(card("账号保护", "请先用手机号登录。亲属绑定需要双方账号确认，避免别人只凭绑定码接入。"));
+            LinearLayout accountCard = card("先登录账号", "亲属绑定需要双方账号确认，避免别人只凭绑定码接入。");
+            Button loginButton = primaryButton("登录");
+            Button registerButton = secondaryButton("注册新账号");
+            loginButton.setOnClickListener(v -> showLogin("home"));
+            registerButton.setOnClickListener(v -> showRegister("home"));
+            accountCard.addView(loginButton);
+            accountCard.addView(registerButton);
+            root.addView(accountCard);
+        } else {
+            Button elderButton = primaryButton("我是长辈");
+            elderButton.setTextSize(23);
+            Button familyButton = secondaryButton("我是家属");
+            familyButton.setTextSize(22);
+            elderButton.setOnClickListener(v -> showElder());
+            familyButton.setOnClickListener(v -> showFamily());
+
+            LinearLayout accountCard = card("已登录", accountPhone + " · " + displayName);
+            root.addView(accountCard);
+
+            LinearLayout elderCard = card("长辈手机", "需要帮助时，向家人发起求助。");
+            elderCard.addView(elderButton);
+            root.addView(elderCard);
+
+            LinearLayout familyCard = card("家属手机", "接收求助，查看屏幕并提供提示。");
+            familyCard.addView(familyButton);
+            root.addView(familyCard);
         }
 
         root.addView(status);
@@ -418,7 +426,8 @@ public class MainActivity extends Activity {
         status.setVisibility(View.GONE);
 
         Button connectionButton = secondaryButton("连接设置");
-        Button accountButton = secondaryButton(isLoggedIn() ? "账号信息" : "手机号登录");
+        Button accountButton = secondaryButton(isLoggedIn() ? "退出登录" : "登录");
+        Button registerButton = secondaryButton("注册新账号");
         Button relativesButton = secondaryButton("亲属管理");
         Button safetyButton = secondaryButton("安全与权限设置");
         Button privacyButton = secondaryButton("隐私政策");
@@ -426,11 +435,12 @@ public class MainActivity extends Activity {
         connectionButton.setOnClickListener(v -> showAdvancedSettings());
         accountButton.setOnClickListener(v -> {
             if (isLoggedIn()) {
-                setStatus("已登录：" + accountPhone + "。如需换号，可在连接设置中清除应用数据后重新登录。");
+                confirmLogout();
             } else {
                 showLogin("profile");
             }
         });
+        registerButton.setOnClickListener(v -> showRegister("profile"));
         relativesButton.setOnClickListener(v -> showRelativesManagement());
         safetyButton.setOnClickListener(v -> {
             if (isBoundAs("elder")) {
@@ -442,10 +452,17 @@ public class MainActivity extends Activity {
         privacyButton.setOnClickListener(v -> showPrivacyPolicy());
 
         LinearLayout settingsCard = card("设置", "");
+        if (isLoggedIn()) {
+            root.addView(card("账号", "手机号：" + accountPhone + "\n称呼：" + displayName));
+        }
         settingsCard.addView(accountButton);
-        settingsCard.addView(relativesButton);
-        settingsCard.addView(connectionButton);
-        settingsCard.addView(safetyButton);
+        if (!isLoggedIn()) {
+            settingsCard.addView(registerButton);
+        } else {
+            settingsCard.addView(relativesButton);
+            settingsCard.addView(connectionButton);
+            settingsCard.addView(safetyButton);
+        }
         settingsCard.addView(privacyButton);
         root.addView(settingsCard);
 
@@ -465,33 +482,26 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         elderBindPolling = false;
         root = verticalRoot();
-        root.addView(hero("账号登录", "保护亲属绑定和远程协助"));
-        status = notice("请使用手机号和密码登录。首次使用请先注册。");
+        root.addView(hero("登录", "使用手机号和密码进入"));
+        status = notice("");
+        status.setVisibility(View.GONE);
 
         EditText phoneInput = input("手机号", accountPhone);
         EditText passwordInput = input("密码", "");
         passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        EditText nameInput = input("我的称呼，例如 妈妈 / 女儿", displayName);
         Button loginButton = primaryButton("登录");
-        Button registerButton = secondaryButton("注册新账号");
+        Button registerButton = secondaryButton("去注册新账号");
         Button backButton = secondaryButton("返回首页");
 
         loginButton.setOnClickListener(v -> loginAccount(
                 phoneInput.getText().toString().trim(),
                 passwordInput.getText().toString(),
-                nameInput.getText().toString().trim(),
+                displayName,
                 afterRole,
                 false,
                 loginButton
         ));
-        registerButton.setOnClickListener(v -> loginAccount(
-                phoneInput.getText().toString().trim(),
-                passwordInput.getText().toString(),
-                nameInput.getText().toString().trim(),
-                afterRole,
-                true,
-                registerButton
-        ));
+        registerButton.setOnClickListener(v -> showRegister(afterRole));
         backButton.setOnClickListener(v -> showSetup());
 
         LinearLayout loginCard = card("账号登录", "");
@@ -499,12 +509,65 @@ public class MainActivity extends Activity {
         loginCard.addView(phoneInput);
         loginCard.addView(label("密码"));
         loginCard.addView(passwordInput);
-        loginCard.addView(label("称呼"));
-        loginCard.addView(nameInput);
         loginCard.addView(loginButton);
         loginCard.addView(registerButton);
         loginCard.addView(backButton);
         root.addView(loginCard);
+        root.addView(status);
+        root.addView(bottomNav("profile"));
+        setContentView(scroll(root));
+    }
+
+    private void showRegister(String afterRole) {
+        currentPage = "register";
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        elderBindPolling = false;
+        root = verticalRoot();
+        root.addView(hero("注册账号", "手机号和密码用于保护亲属绑定"));
+        status = notice("密码至少 6 位。注册后再添加长辈或家属。");
+
+        EditText phoneInput = input("手机号", accountPhone);
+        EditText passwordInput = input("设置密码", "");
+        EditText confirmInput = input("再次输入密码", "");
+        passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        confirmInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        EditText nameInput = input("我的称呼，例如 妈妈 / 女儿", displayName);
+        Button registerButton = primaryButton("注册并登录");
+        Button loginButton = secondaryButton("已有账号，去登录");
+        Button backButton = secondaryButton("返回首页");
+
+        registerButton.setOnClickListener(v -> {
+            String password = passwordInput.getText().toString();
+            if (!password.equals(confirmInput.getText().toString())) {
+                setStatus("两次输入的密码不一致。");
+                return;
+            }
+            loginAccount(
+                    phoneInput.getText().toString().trim(),
+                    password,
+                    nameInput.getText().toString().trim(),
+                    afterRole,
+                    true,
+                    registerButton
+            );
+        });
+        loginButton.setOnClickListener(v -> showLogin(afterRole));
+        backButton.setOnClickListener(v -> showSetup());
+
+        LinearLayout registerCard = card("创建账号", "");
+        registerCard.addView(label("手机号"));
+        registerCard.addView(phoneInput);
+        registerCard.addView(label("密码"));
+        registerCard.addView(passwordInput);
+        registerCard.addView(label("确认密码"));
+        registerCard.addView(confirmInput);
+        registerCard.addView(label("称呼"));
+        registerCard.addView(nameInput);
+        registerCard.addView(registerButton);
+        registerCard.addView(loginButton);
+        registerCard.addView(backButton);
+        root.addView(registerCard);
         root.addView(status);
         root.addView(bottomNav("profile"));
         setContentView(scroll(root));
@@ -780,16 +843,19 @@ public class MainActivity extends Activity {
 
         if (!isLoggedIn()) {
             LinearLayout loginCard = card("先登录账号", "登录后才能邀请、确认或管理亲属。");
-            Button loginButton = primaryButton("手机号登录");
+            Button loginButton = primaryButton("登录");
+            Button registerButton = secondaryButton("注册新账号");
             loginButton.setOnClickListener(v -> showLogin("profile"));
+            registerButton.setOnClickListener(v -> showRegister("profile"));
             loginCard.addView(loginButton);
+            loginCard.addView(registerButton);
             root.addView(loginCard);
         } else {
             root.addView(card("当前账号", "手机号：" + accountPhone + "\n称呼：" + displayName));
             root.addView(card("当前绑定", bindingStatusText()));
             root.addView(card("绑定规则", "家属输入绑定码后不会直接绑定。长辈必须在本机确认，家属才能加入。绑定码 10 分钟有效且会记录审计。"));
-            Button elderInviteButton = primaryButton("我是长辈，邀请家属");
-            Button familyBindButton = secondaryButton("我是家属，添加长辈");
+            Button elderInviteButton = primaryButton(isBoundAs("elder") ? "邀请更多家属" : "我是长辈，邀请家属");
+            Button familyBindButton = secondaryButton(isBoundAs("family") ? "绑定其他长辈" : "我是家属，添加长辈");
             elderInviteButton.setOnClickListener(v -> showElder());
             familyBindButton.setOnClickListener(v -> showFamilyBind());
             LinearLayout actionCard = card("添加亲属", "");
@@ -800,6 +866,41 @@ public class MainActivity extends Activity {
         root.addView(status);
         root.addView(bottomNav("profile"));
         setContentView(scroll(root));
+    }
+
+    private void confirmLogout() {
+        new AlertDialog.Builder(this)
+                .setTitle("退出登录")
+                .setMessage("只会退出这台手机的账号，不会删除已经建立的亲属关系。")
+                .setPositiveButton("退出", (dialog, which) -> logoutLocal())
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void logoutLocal() {
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        elderBindPolling = false;
+        main.removeCallbacks(familyBindPendingLoopRunnable);
+        stopFamilyWebRtc();
+        accountToken = "";
+        accountPhone = "";
+        authToken = "";
+        memberRole = "";
+        prefs.edit()
+                .remove("accountToken")
+                .remove("accountPhone")
+                .remove("authToken")
+                .remove("memberRole")
+                .remove(PREF_ASSIST_SESSION_ID)
+                .remove("pendingInviteCode")
+                .remove("pendingBindToken")
+                .remove("pendingBindPairCode")
+                .putBoolean("familyBound", false)
+                .putBoolean("assistActive", false)
+                .apply();
+        showSetup();
+        setStatus("已退出登录。");
     }
 
     private void showFamily() {
@@ -1507,6 +1608,9 @@ public class MainActivity extends Activity {
                         showElder();
                     } else if ("family".equals(afterRole)) {
                         showFamily();
+                    } else if ("home".equals(afterRole)) {
+                        showSetup();
+                        setStatus(register ? "注册成功，请选择使用方式。" : "登录成功，请选择使用方式。");
                     } else {
                         showProfile();
                         setStatus(register ? "注册成功。" : "登录成功。");
