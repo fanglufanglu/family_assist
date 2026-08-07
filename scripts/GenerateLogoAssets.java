@@ -37,28 +37,28 @@ public class GenerateLogoAssets {
         g.fill(new RoundRectangle2D.Double(0, 0, size, size, 232 * s, 232 * s));
 
         Path2D heart = new Path2D.Double();
-        heart.moveTo(512 * s, 825 * s);
-        heart.curveTo(446 * s, 768 * s, 190 * s, 607 * s, 190 * s, 398 * s);
-        heart.curveTo(190 * s, 256 * s, 294 * s, 180 * s, 417 * s, 180 * s);
-        heart.curveTo(474 * s, 180 * s, 512 * s, 218 * s, 512 * s, 275 * s);
-        heart.curveTo(512 * s, 218 * s, 550 * s, 180 * s, 607 * s, 180 * s);
-        heart.curveTo(730 * s, 180 * s, 834 * s, 256 * s, 834 * s, 398 * s);
-        heart.curveTo(834 * s, 607 * s, 578 * s, 768 * s, 512 * s, 825 * s);
+        heart.moveTo(512 * s, 769 * s);
+        heart.curveTo(458 * s, 722 * s, 248 * s, 590 * s, 248 * s, 419 * s);
+        heart.curveTo(248 * s, 302 * s, 333 * s, 240 * s, 434 * s, 240 * s);
+        heart.curveTo(481 * s, 240 * s, 512 * s, 271 * s, 512 * s, 318 * s);
+        heart.curveTo(512 * s, 271 * s, 543 * s, 240 * s, 590 * s, 240 * s);
+        heart.curveTo(691 * s, 240 * s, 776 * s, 302 * s, 776 * s, 419 * s);
+        heart.curveTo(776 * s, 590 * s, 566 * s, 722 * s, 512 * s, 769 * s);
         heart.closePath();
         g.setColor(c(0xfff8f6));
         g.fill(heart);
 
-        drawPhone(g, 341 * s, 360 * s, 142 * s, 256 * s, c(0x356ae6), s);
-        drawPhone(g, 541 * s, 360 * s, 142 * s, 256 * s, c(0xf2556f), s);
+        drawPhone(g, 372 * s, 387 * s, 116 * s, 210 * s, c(0x356ae6), s);
+        drawPhone(g, 536 * s, 387 * s, 116 * s, 210 * s, c(0xf2556f), s);
 
         Path2D linkHeart = new Path2D.Double();
-        linkHeart.moveTo(512 * s, 560 * s);
-        linkHeart.curveTo(495 * s, 545 * s, 470 * s, 528 * s, 470 * s, 503 * s);
-        linkHeart.curveTo(470 * s, 486 * s, 482 * s, 476 * s, 495 * s, 476 * s);
-        linkHeart.curveTo(505 * s, 476 * s, 512 * s, 484 * s, 512 * s, 493 * s);
-        linkHeart.curveTo(512 * s, 484 * s, 519 * s, 476 * s, 529 * s, 476 * s);
-        linkHeart.curveTo(542 * s, 476 * s, 554 * s, 486 * s, 554 * s, 503 * s);
-        linkHeart.curveTo(554 * s, 528 * s, 529 * s, 545 * s, 512 * s, 560 * s);
+        linkHeart.moveTo(512 * s, 551 * s);
+        linkHeart.curveTo(498 * s, 539 * s, 478 * s, 525 * s, 478 * s, 505 * s);
+        linkHeart.curveTo(478 * s, 491 * s, 488 * s, 483 * s, 498 * s, 483 * s);
+        linkHeart.curveTo(506 * s, 483 * s, 512 * s, 489 * s, 512 * s, 497 * s);
+        linkHeart.curveTo(512 * s, 489 * s, 518 * s, 483 * s, 526 * s, 483 * s);
+        linkHeart.curveTo(536 * s, 483 * s, 546 * s, 491 * s, 546 * s, 505 * s);
+        linkHeart.curveTo(546 * s, 525 * s, 526 * s, 539 * s, 512 * s, 551 * s);
         linkHeart.closePath();
         g.setColor(c(0xf2a23a));
         g.fill(linkHeart);
