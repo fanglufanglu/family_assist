@@ -1,5 +1,4 @@
 import javax.imageio.ImageIO;
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.LinearGradientPaint;
@@ -49,12 +48,20 @@ public class GenerateLogoAssets {
         g.setColor(c(0xfff8f6));
         g.fill(heart);
 
-        drawPhone(g, 318 * s, 398 * s, 206 * s, 282 * s, 42 * s, c(0x356ae6));
-        drawPhone(g, 500 * s, 398 * s, 206 * s, 282 * s, 42 * s, c(0xf2556f));
+        drawPhone(g, 322 * s, 389 * s, 171 * s, 303 * s, c(0x356ae6), s);
+        drawPhone(g, 531 * s, 389 * s, 171 * s, 303 * s, c(0xf2556f), s);
+
+        Path2D linkHeart = new Path2D.Double();
+        linkHeart.moveTo(512 * s, 607 * s);
+        linkHeart.curveTo(493 * s, 588 * s, 465 * s, 569 * s, 465 * s, 541 * s);
+        linkHeart.curveTo(465 * s, 522 * s, 479 * s, 512 * s, 493 * s, 512 * s);
+        linkHeart.curveTo(504 * s, 512 * s, 512 * s, 522 * s, 512 * s, 531 * s);
+        linkHeart.curveTo(512 * s, 522 * s, 520 * s, 512 * s, 531 * s, 512 * s);
+        linkHeart.curveTo(545 * s, 512 * s, 559 * s, 522 * s, 559 * s, 541 * s);
+        linkHeart.curveTo(559 * s, 569 * s, 531 * s, 588 * s, 512 * s, 607 * s);
+        linkHeart.closePath();
         g.setColor(c(0xf2a23a));
-        g.fill(new Ellipse2D.Double(465 * s, 515 * s, 94 * s, 94 * s));
-        g.setColor(c(0xfff8f6));
-        g.fill(new Ellipse2D.Double(494 * s, 544 * s, 36 * s, 36 * s));
+        g.fill(linkHeart);
         g.dispose();
         return image;
     }
@@ -71,10 +78,15 @@ public class GenerateLogoAssets {
     }
 
     private static void drawPhone(Graphics2D g, double x, double y, double w, double h,
-                                  double strokeWidth, Color color) {
+                                  Color color, double scale) {
         g.setColor(color);
-        g.setStroke(new BasicStroke((float) strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        g.draw(new RoundRectangle2D.Double(x, y, w, h, 48 * (w / 206.0), 48 * (w / 206.0)));
+        g.fill(new RoundRectangle2D.Double(x, y, w, h, 42 * scale, 42 * scale));
+        g.setColor(c(0xfff8f6));
+        g.fill(new RoundRectangle2D.Double(
+                x + 38 * scale, y + 47 * scale, w - 76 * scale, h - 132 * scale,
+                8 * scale, 8 * scale));
+        g.fill(new Ellipse2D.Double(
+                x + (w / 2) - 14 * scale, y + h - 62 * scale, 28 * scale, 28 * scale));
     }
 
     private static Color c(int rgb) {
