@@ -1,4 +1,5 @@
 import javax.imageio.ImageIO;
+import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.LinearGradientPaint;
@@ -48,8 +49,12 @@ public class GenerateLogoAssets {
         g.setColor(c(0xfff8f6));
         g.fill(heart);
 
-        drawPerson(g, 427 * s, 455 * s, 47 * s, 332 * s, 512 * s, 180 * s, 170 * s, c(0xb72c49), true);
-        drawPerson(g, 597 * s, 455 * s, 47 * s, 512 * s, 512 * s, 180 * s, 170 * s, c(0xf2a23a), false);
+        drawPhone(g, 318 * s, 398 * s, 206 * s, 282 * s, 42 * s, c(0x356ae6));
+        drawPhone(g, 500 * s, 398 * s, 206 * s, 282 * s, 42 * s, c(0xf2556f));
+        g.setColor(c(0xf2a23a));
+        g.fill(new Ellipse2D.Double(465 * s, 515 * s, 94 * s, 94 * s));
+        g.setColor(c(0xfff8f6));
+        g.fill(new Ellipse2D.Double(494 * s, 544 * s, 36 * s, 36 * s));
         g.dispose();
         return image;
     }
@@ -65,26 +70,11 @@ public class GenerateLogoAssets {
         return round;
     }
 
-    private static void drawPerson(Graphics2D g, double cx, double cy, double radius,
-                                   double x, double y, double w, double h, Color color, boolean left) {
+    private static void drawPhone(Graphics2D g, double x, double y, double w, double h,
+                                  double strokeWidth, Color color) {
         g.setColor(color);
-        g.fill(new Ellipse2D.Double(cx - radius, cy - radius, radius * 2, radius * 2));
-        Path2D body = new Path2D.Double();
-        if (left) {
-            body.moveTo(x, y + h);
-            body.curveTo(x, y + 42, x + 38, y, x + 90, y);
-            body.curveTo(x + 145, y, x + w, y + 48, x + w, y + 104);
-            body.lineTo(x + w, y + h);
-            body.curveTo(x + 122, y + 130, x + 58, y + 130, x, y + h);
-        } else {
-            body.moveTo(x + w, y + h);
-            body.curveTo(x + w, y + 42, x + w - 38, y, x + 90, y);
-            body.curveTo(x + 35, y, x, y + 48, x, y + 104);
-            body.lineTo(x, y + h);
-            body.curveTo(x + 58, y + 130, x + 122, y + 130, x + w, y + h);
-        }
-        body.closePath();
-        g.fill(body);
+        g.setStroke(new BasicStroke((float) strokeWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(new RoundRectangle2D.Double(x, y, w, h, 48 * (w / 206.0), 48 * (w / 206.0)));
     }
 
     private static Color c(int rgb) {

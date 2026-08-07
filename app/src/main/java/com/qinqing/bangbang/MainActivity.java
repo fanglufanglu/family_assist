@@ -202,14 +202,19 @@ public class MainActivity extends Activity {
         }
     };
 
-    private static final int COLOR_BG = 0xFFFFF8FA;
+    private static final int COLOR_BG = 0xFFFFF9FA;
     private static final int COLOR_SURFACE = 0xFFFFFFFF;
-    private static final int COLOR_TEXT = 0xFF2B2225;
-    private static final int COLOR_MUTED = 0xFF74666B;
-    private static final int COLOR_LINE = 0xFFECDDE1;
-    private static final int COLOR_BLUE = 0xFFE84B67;
-    private static final int COLOR_BLUE_DARK = 0xFFB72C49;
-    private static final int COLOR_RED = 0xFFD9364F;
+    private static final int COLOR_TEXT = 0xFF2B2528;
+    private static final int COLOR_MUTED = 0xFF746A6E;
+    private static final int COLOR_LINE = 0xFFEADFE2;
+    private static final int COLOR_BRAND = 0xFFF2556F;
+    private static final int COLOR_BLUE = 0xFFD83F5F;
+    private static final int COLOR_BLUE_DARK = 0xFFB62D4A;
+    private static final int COLOR_FAMILY = 0xFF6558C9;
+    private static final int COLOR_CONTROL = 0xFF356AE6;
+    private static final int COLOR_SUCCESS = 0xFF278A65;
+    private static final int COLOR_WARNING = 0xFFE58A28;
+    private static final int COLOR_RED = 0xFFD83F4B;
     private static final int COLOR_WARM = 0xFFFFEDF2;
 
     @Override
@@ -399,7 +404,7 @@ public class MainActivity extends Activity {
         } else {
             Button elderButton = primaryButton("我是长辈");
             elderButton.setTextSize(23);
-            Button familyButton = secondaryButton("我是家属");
+            Button familyButton = familyPrimaryButton("我是家属");
             familyButton.setTextSize(22);
             elderButton.setOnClickListener(v -> showElder());
             familyButton.setOnClickListener(v -> showFamily());
@@ -408,7 +413,7 @@ public class MainActivity extends Activity {
             elderCard.addView(elderButton);
             root.addView(elderCard);
 
-            LinearLayout familyCard = actionCard("我来帮长辈", "查看长辈屏幕并给出清楚提示", 0xFFEEF3FF);
+            LinearLayout familyCard = actionCard("我来帮长辈", "查看长辈屏幕并给出清楚提示", 0xFFF3F1FF);
             familyCard.addView(familyButton);
             root.addView(familyCard);
         }
@@ -1169,10 +1174,10 @@ public class MainActivity extends Activity {
         status.setVisibility(View.GONE);
         View screenView = buildFrameView();
 
-        familyControlRequestButton = secondaryButton("请求远程操作授权");
-        familyRemoteButton = secondaryButton("远程操作");
+        familyControlRequestButton = familySecondaryButton("请求远程操作授权");
+        familyRemoteButton = controlPrimaryButton("远程操作");
         familyEndButton = dangerButton("结束本次协助");
-        familyChangeBindingButton = secondaryButton("绑定其他长辈");
+        familyChangeBindingButton = familySecondaryButton("绑定其他长辈");
         familyControlRequestButton.setOnClickListener(v -> requestRemoteControl(familyControlRequestButton));
         familyRemoteButton.setOnClickListener(v -> showRemoteControlPanel());
         familyEndButton.setOnClickListener(v -> endFamilyAssistView());
@@ -1183,6 +1188,7 @@ public class MainActivity extends Activity {
         familyWaitingTitle = (TextView) familyWaitingView.getChildAt(0);
         familyWaitingCaption = (TextView) familyWaitingView.getChildAt(1);
         familyScreenLabelView = screenLabel("长辈实时屏幕");
+        familyScreenLabelView.setTextColor(COLOR_FAMILY);
         familyScreenSurface = screenSurface(screenView);
         familyFullscreenButton = fullscreenIconButton(R.drawable.ic_fullscreen, "全屏查看");
         familyFullscreenButton.setOnClickListener(v -> openFamilyFullscreen());
@@ -1243,12 +1249,12 @@ public class MainActivity extends Activity {
         panel.setPadding(dp(18), dp(6), dp(18), dp(8));
         panel.addView(caption("点击画面可直接操作；也可以使用下面的快捷操作。"));
 
-        Button homeButton = secondaryButton("主页");
-        Button backButton = secondaryButton("返回");
-        Button swipeUpButton = secondaryButton("上滑");
-        Button swipeDownButton = secondaryButton("下滑");
-        Button swipeLeftButton = secondaryButton("左滑");
-        Button swipeRightButton = secondaryButton("右滑");
+        Button homeButton = familySecondaryButton("主页");
+        Button backButton = familySecondaryButton("返回");
+        Button swipeUpButton = familySecondaryButton("上滑");
+        Button swipeDownButton = familySecondaryButton("下滑");
+        Button swipeLeftButton = familySecondaryButton("左滑");
+        Button swipeRightButton = familySecondaryButton("右滑");
 
         homeButton.setOnClickListener(v -> sendRemoteGlobal("home"));
         backButton.setOnClickListener(v -> sendRemoteGlobal("back"));
@@ -3528,10 +3534,24 @@ public class MainActivity extends Activity {
             boolean empty = text == null || text.trim().isEmpty();
             boolean quietFamilyUpdate = "family".equals(currentPage) && !isImportantStatus(text);
             boolean error = isImportantStatus(text);
-            status.setTextColor(error ? 0xFF9F1D24 : 0xFF31506F);
-            status.setBackground(rounded(error ? 0xFFFFF2F2 : 0xFFF2F7FD, dp(8), error ? 0xFFF3B8BC : 0xFFC9DDF4));
+            boolean positive = !error && isPositiveStatus(text);
+            int textColor = error ? 0xFF9F1D24 : positive ? COLOR_SUCCESS : 0xFF294F9B;
+            int backgroundColor = error ? 0xFFFFF2F2 : positive ? 0xFFF0F8F4 : 0xFFF1F5FF;
+            int borderColor = error ? 0xFFF3B8BC : positive ? 0xFFB9DDCE : 0xFFC9D7F7;
+            status.setTextColor(textColor);
+            status.setBackground(rounded(backgroundColor, dp(8), borderColor));
             status.setVisibility(empty || quietFamilyUpdate ? View.GONE : View.VISIBLE);
         }
+    }
+
+    private boolean isPositiveStatus(String text) {
+        if (text == null) return false;
+        return text.contains("成功")
+                || text.contains("已开启")
+                || text.contains("已允许")
+                || text.contains("已绑定")
+                || text.contains("已保存")
+                || text.contains("连接正常");
     }
 
     private boolean isImportantStatus(String text) {
@@ -3654,7 +3674,8 @@ public class MainActivity extends Activity {
 
         ImageView iconView = new ImageView(this);
         iconView.setImageResource(iconRes);
-        iconView.setColorFilter(selected ? COLOR_BLUE_DARK : COLOR_MUTED);
+        int selectedColor = "家属".equals(text) ? COLOR_FAMILY : COLOR_BLUE_DARK;
+        iconView.setColorFilter(selected ? selectedColor : COLOR_MUTED);
         iconView.setContentDescription(text);
 
         TextView labelView = new TextView(this);
@@ -3662,12 +3683,12 @@ public class MainActivity extends Activity {
         labelView.setTextSize(12);
         labelView.setTypeface(selected ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         labelView.setGravity(Gravity.CENTER);
-        labelView.setTextColor(selected ? COLOR_BLUE_DARK : COLOR_MUTED);
+        labelView.setTextColor(selected ? selectedColor : COLOR_MUTED);
         labelView.setIncludeFontPadding(false);
         labelView.setPadding(0, dp(3), 0, dp(3));
 
         View indicator = new View(this);
-        indicator.setBackgroundColor(selected ? COLOR_BLUE_DARK : 0x00FFFFFF);
+        indicator.setBackgroundColor(selected ? selectedColor : 0x00FFFFFF);
         LinearLayout.LayoutParams indicatorParams = new LinearLayout.LayoutParams(dp(18), dp(3));
         indicatorParams.setMargins(0, dp(1), 0, 0);
 
@@ -3776,7 +3797,7 @@ public class MainActivity extends Activity {
         layout.addView(body);
 
         View accent = new View(this);
-        accent.setBackgroundColor(COLOR_BLUE);
+        accent.setBackgroundColor(COLOR_BRAND);
         LinearLayout.LayoutParams accentParams = new LinearLayout.LayoutParams(dp(36), dp(3));
         accentParams.setMargins(0, dp(8), 0, 0);
         layout.addView(accent, accentParams);
@@ -3864,7 +3885,7 @@ public class MainActivity extends Activity {
         avatar.setTextColor(Color.WHITE);
         avatar.setTypeface(Typeface.DEFAULT_BOLD);
         avatar.setGravity(Gravity.CENTER);
-        avatar.setBackground(rounded(COLOR_BLUE, dp(8), COLOR_BLUE));
+        avatar.setBackground(rounded(COLOR_BRAND, dp(8), COLOR_BRAND));
         summary.addView(avatar, new LinearLayout.LayoutParams(dp(52), dp(52)));
 
         LinearLayout copy = new LinearLayout(this);
@@ -4048,6 +4069,25 @@ public class MainActivity extends Activity {
         Button button = primaryButton(text);
         button.setTextColor(COLOR_BLUE_DARK);
         button.setBackground(rounded(0xFFFFF4F7, dp(8), 0xFFE7C7D0));
+        return button;
+    }
+
+    private Button familyPrimaryButton(String text) {
+        Button button = primaryButton(text);
+        button.setBackground(rounded(COLOR_FAMILY, dp(8), COLOR_FAMILY));
+        return button;
+    }
+
+    private Button familySecondaryButton(String text) {
+        Button button = primaryButton(text);
+        button.setTextColor(COLOR_FAMILY);
+        button.setBackground(rounded(0xFFF5F3FF, dp(8), 0xFFD7D1F5));
+        return button;
+    }
+
+    private Button controlPrimaryButton(String text) {
+        Button button = primaryButton(text);
+        button.setBackground(rounded(COLOR_CONTROL, dp(8), COLOR_CONTROL));
         return button;
     }
 
