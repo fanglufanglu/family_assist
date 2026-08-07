@@ -1,6 +1,7 @@
 import javax.imageio.ImageIO;
 import java.awt.Color;
 import java.awt.Graphics2D;
+import java.awt.LinearGradientPaint;
 import java.awt.RenderingHints;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
@@ -29,7 +30,10 @@ public class GenerateLogoAssets {
         Graphics2D g = image.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-        g.setColor(c(0xf05a72));
+        g.setPaint(new LinearGradientPaint(
+                0, 0, size, size,
+                new float[]{0f, 0.52f, 1f},
+                new Color[]{c(0xff6b5f), c(0xf0447d), c(0x6758c8)}));
         g.fill(new RoundRectangle2D.Double(0, 0, size, size, 232 * s, 232 * s));
 
         Path2D heart = new Path2D.Double();
