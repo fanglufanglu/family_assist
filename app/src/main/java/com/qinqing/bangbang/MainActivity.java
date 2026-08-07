@@ -106,12 +106,25 @@ public class MainActivity extends Activity {
             main.postDelayed(this, 1200);
         }
     };
+    private final Runnable familyBindPendingLoopRunnable = new Runnable() {
+        @Override
+        public void run() {
+            String pendingToken = prefs.getString("pendingBindToken", "");
+            if (pendingToken.isEmpty()) {
+                return;
+            }
+            pollFamilyBindPendingOnce();
+            main.postDelayed(this, 1500);
+        }
+    };
 
     private LinearLayout root;
     private SharedPreferences prefs;
     private String baseUrl;
     private String pairCode;
     private String displayName;
+    private String accountToken;
+    private String accountPhone;
     private String authToken;
     private String memberRole;
     private String deviceId;
@@ -201,6 +214,8 @@ public class MainActivity extends Activity {
         baseUrl = migrateRelayUrl(prefs.getString("baseUrl", DEFAULT_RELAY_URL));
         pairCode = prefs.getString("pairCode", DEFAULT_PAIR_CODE);
         displayName = prefs.getString("displayName", "妈妈");
+        accountToken = prefs.getString("accountToken", "");
+        accountPhone = prefs.getString("accountPhone", "");
         authToken = prefs.getString("authToken", "");
         memberRole = prefs.getString("memberRole", "");
         deviceId = prefs.getString("deviceId", "");
@@ -221,6 +236,7 @@ public class MainActivity extends Activity {
         main.removeCallbacks(familyPollLoopRunnable);
         main.removeCallbacks(elderAnnotationLoopRunnable);
         main.removeCallbacks(elderBindLoopRunnable);
+        main.removeCallbacks(familyBindPendingLoopRunnable);
         familyPolling = false;
         elderAnnotationPolling = false;
         elderBindPolling = false;
@@ -295,8 +311,10 @@ public class MainActivity extends Activity {
             closeFamilyFullscreen();
         } else if ("home".equals(currentPage)) {
             super.onBackPressed();
-        } else if ("settings".equals(currentPage) || "privacy".equals(currentPage)) {
+        } else if ("settings".equals(currentPage) || "privacy".equals(currentPage) || "relatives".equals(currentPage) || "login".equals(currentPage)) {
             showProfile();
+        } else if ("familyBindPending".equals(currentPage)) {
+            showFamilyBind();
         } else if ("safety".equals(currentPage)) {
             showElder();
         } else {
@@ -362,8 +380,12 @@ public class MainActivity extends Activity {
         elderButton.setTextSize(23);
         Button familyButton = secondaryButton("我是家属");
         familyButton.setTextSize(22);
-        elderButton.setOnClickListener(v -> showElder());
-        familyButton.setOnClickListener(v -> showFamily());
+        elderButton.setOnClickListener(v -> {
+            if (ensureLoggedIn("elder")) showElder();
+        });
+        familyButton.setOnClickListener(v -> {
+            if (ensureLoggedIn("family")) showFamily();
+        });
 
         LinearLayout elderCard = card("长辈手机", "需要帮助时，向家人发起求助。");
         elderCard.addView(elderButton);
@@ -372,6 +394,10 @@ public class MainActivity extends Activity {
         LinearLayout familyCard = card("家属手机", "接收求助，查看屏幕并提供提示。");
         familyCard.addView(familyButton);
         root.addView(familyCard);
+
+        if (!isLoggedIn()) {
+            root.addView(card("账号保护", "请先用手机号登录。亲属绑定需要双方账号确认，避免别人只凭绑定码接入。"));
+        }
 
         root.addView(status);
         root.addView(bottomNav("home"));
@@ -391,10 +417,20 @@ public class MainActivity extends Activity {
         status.setVisibility(View.GONE);
 
         Button connectionButton = secondaryButton("连接设置");
+        Button accountButton = secondaryButton(isLoggedIn() ? "账号信息" : "手机号登录");
+        Button relativesButton = secondaryButton("亲属管理");
         Button safetyButton = secondaryButton("安全与权限设置");
         Button privacyButton = secondaryButton("隐私政策");
 
         connectionButton.setOnClickListener(v -> showAdvancedSettings());
+        accountButton.setOnClickListener(v -> {
+            if (isLoggedIn()) {
+                setStatus("已登录：" + accountPhone + "。如需换号，可在连接设置中清除应用数据后重新登录。");
+            } else {
+                showLogin("profile");
+            }
+        });
+        relativesButton.setOnClickListener(v -> showRelativesManagement());
         safetyButton.setOnClickListener(v -> {
             if (isBoundAs("elder")) {
                 showSafetySettings();
@@ -405,6 +441,8 @@ public class MainActivity extends Activity {
         privacyButton.setOnClickListener(v -> showPrivacyPolicy());
 
         LinearLayout settingsCard = card("设置", "");
+        settingsCard.addView(accountButton);
+        settingsCard.addView(relativesButton);
         settingsCard.addView(connectionButton);
         settingsCard.addView(safetyButton);
         settingsCard.addView(privacyButton);
@@ -415,6 +453,45 @@ public class MainActivity extends Activity {
                 + "\n实时模式：" + (isWebRtcEnabled() ? "已开启" : "已关闭")
                 + "\n连接服务：已配置");
         root.addView(aboutCard);
+        root.addView(status);
+        root.addView(bottomNav("profile"));
+        setContentView(scroll(root));
+    }
+
+    private void showLogin(String afterRole) {
+        currentPage = "login";
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        elderBindPolling = false;
+        root = verticalRoot();
+        root.addView(hero("手机号登录", "保护亲属绑定和远程协助"));
+        status = notice("内测阶段请输入手机号和任意 4-6 位验证码。正式版会接入短信验证码。");
+
+        EditText phoneInput = input("手机号", accountPhone);
+        EditText codeInput = input("验证码", "");
+        EditText nameInput = input("我的称呼，例如 妈妈 / 女儿", displayName);
+        Button loginButton = primaryButton("登录并继续");
+        Button backButton = secondaryButton("返回首页");
+
+        loginButton.setOnClickListener(v -> loginAccount(
+                phoneInput.getText().toString().trim(),
+                codeInput.getText().toString().trim(),
+                nameInput.getText().toString().trim(),
+                afterRole,
+                loginButton
+        ));
+        backButton.setOnClickListener(v -> showSetup());
+
+        LinearLayout loginCard = card("账号登录", "");
+        loginCard.addView(label("手机号"));
+        loginCard.addView(phoneInput);
+        loginCard.addView(label("验证码"));
+        loginCard.addView(codeInput);
+        loginCard.addView(label("称呼"));
+        loginCard.addView(nameInput);
+        loginCard.addView(loginButton);
+        loginCard.addView(backButton);
+        root.addView(loginCard);
         root.addView(status);
         root.addView(bottomNav("profile"));
         setContentView(scroll(root));
@@ -469,6 +546,9 @@ public class MainActivity extends Activity {
     }
 
     private void showElder() {
+        if (!ensureLoggedIn("elder")) {
+            return;
+        }
         currentPage = "elder";
         prefs.edit().putBoolean("elderPageVisible", true).apply();
         familyPolling = false;
@@ -675,11 +755,52 @@ public class MainActivity extends Activity {
         setContentView(scroll(root));
     }
 
+    private void showRelativesManagement() {
+        currentPage = "relatives";
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        elderBindPolling = false;
+        root = verticalRoot();
+        root.addView(pageHeader("亲属管理", this::showProfile));
+        status = notice("");
+        status.setVisibility(View.GONE);
+
+        if (!isLoggedIn()) {
+            LinearLayout loginCard = card("先登录账号", "登录后才能邀请、确认或管理亲属。");
+            Button loginButton = primaryButton("手机号登录");
+            loginButton.setOnClickListener(v -> showLogin("profile"));
+            loginCard.addView(loginButton);
+            root.addView(loginCard);
+        } else {
+            root.addView(card("当前账号", "手机号：" + accountPhone + "\n称呼：" + displayName));
+            root.addView(card("当前绑定", bindingStatusText()));
+            root.addView(card("绑定规则", "家属输入绑定码后不会直接绑定。长辈必须在本机确认，家属才能加入。绑定码 10 分钟有效且会记录审计。"));
+            Button elderInviteButton = primaryButton("我是长辈，邀请家属");
+            Button familyBindButton = secondaryButton("我是家属，添加长辈");
+            elderInviteButton.setOnClickListener(v -> showElder());
+            familyBindButton.setOnClickListener(v -> showFamilyBind());
+            LinearLayout actionCard = card("添加亲属", "");
+            actionCard.addView(elderInviteButton);
+            actionCard.addView(familyBindButton);
+            root.addView(actionCard);
+        }
+        root.addView(status);
+        root.addView(bottomNav("profile"));
+        setContentView(scroll(root));
+    }
+
     private void showFamily() {
         closeFamilyFullscreen();
+        if (!ensureLoggedIn("family")) {
+            return;
+        }
         currentPage = "family";
         prefs.edit().putBoolean("elderPageVisible", false).apply();
         if (!isBoundAs("family")) {
+            if (!prefs.getString("pendingBindToken", "").isEmpty()) {
+                showFamilyBindPending();
+                return;
+            }
             showFamilyBind();
             return;
         }
@@ -1096,6 +1217,9 @@ public class MainActivity extends Activity {
     }
 
     private void showFamilyBind() {
+        if (!ensureLoggedIn("family")) {
+            return;
+        }
         currentPage = "familyBind";
         familyPolling = false;
         elderAnnotationPolling = false;
@@ -1130,6 +1254,70 @@ public class MainActivity extends Activity {
         root.addView(status);
         root.addView(bottomNav("family"));
         setContentView(scroll(root));
+    }
+
+    private void showFamilyBindPending() {
+        currentPage = "familyBindPending";
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        elderBindPolling = false;
+        root = verticalRoot();
+        root.addView(hero("等待长辈确认", "长辈同意后才会完成绑定"));
+        status = notice("已发送绑定申请。请让长辈在亲情帮帮里点“同意绑定”。");
+        Button refreshButton = primaryButton("查看确认结果");
+        Button cancelButton = secondaryButton("重新输入绑定码");
+        refreshButton.setOnClickListener(v -> pollFamilyBindPendingOnce());
+        cancelButton.setOnClickListener(v -> {
+            prefs.edit().remove("pendingBindToken").remove("pendingBindPairCode").apply();
+            main.removeCallbacks(familyBindPendingLoopRunnable);
+            showFamilyBind();
+        });
+        LinearLayout waitCard = card("绑定申请已发送", "为了保护长辈，知道绑定码还不能直接绑定。需要长辈在自己手机上确认你的账号。");
+        waitCard.addView(refreshButton);
+        waitCard.addView(cancelButton);
+        root.addView(waitCard);
+        root.addView(status);
+        root.addView(bottomNav("family"));
+        setContentView(scroll(root));
+        main.removeCallbacks(familyBindPendingLoopRunnable);
+        main.post(familyBindPendingLoopRunnable);
+    }
+
+    private void pollFamilyBindPendingOnce() {
+        String pendingToken = prefs.getString("pendingBindToken", "");
+        String pendingPairCode = prefs.getString("pendingBindPairCode", pairCode);
+        if (pendingToken.isEmpty()) {
+            return;
+        }
+        statusIo.execute(() -> {
+            try {
+                JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/pending?pairCode=" + encoded(pendingPairCode)
+                        + "&pendingToken=" + encoded(pendingToken)
+                        + "&accountToken=" + encoded(accountToken));
+                if (result.optBoolean("approved", false)) {
+                    authToken = result.optString("authToken", "");
+                    pairCode = result.optString("pairCode", pendingPairCode);
+                    memberRole = "family";
+                    prefs.edit()
+                            .putString("authToken", authToken)
+                            .putString("pairCode", pairCode)
+                            .putString("memberRole", memberRole)
+                            .remove("pendingBindToken")
+                            .remove("pendingBindPairCode")
+                            .apply();
+                    main.removeCallbacks(familyBindPendingLoopRunnable);
+                    main.post(() -> {
+                        showFamily();
+                        setStatus("长辈已同意绑定。正在等待长辈发起求助。");
+                    });
+                } else {
+                    main.post(() -> setStatus("还在等待长辈确认。"));
+                }
+            } catch (Exception e) {
+                main.removeCallbacks(familyBindPendingLoopRunnable);
+                main.post(() -> setStatus("绑定申请未通过或已过期：" + friendlyError(e)));
+            }
+        });
     }
 
     private void confirmChangeFamilyBinding() {
@@ -1271,6 +1459,51 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void loginAccount(String phone, String code, String name, String afterRole, Button sourceButton) {
+        if (phone.isEmpty() || code.isEmpty()) {
+            setStatus("请输入手机号和验证码。");
+            return;
+        }
+        if (name.isEmpty()) {
+            name = "亲友";
+        }
+        final String finalName = name;
+        setButtonBusy(sourceButton, "登录中...");
+        setStatus("正在登录...");
+        statusIo.execute(() -> {
+            try {
+                JSONObject result = NetworkClient.postJson(baseUrl, "/api/account/login", new JSONObject()
+                        .put("phone", phone)
+                        .put("code", code)
+                        .put("name", finalName));
+                accountToken = result.optString("accountToken", "");
+                JSONObject user = result.optJSONObject("user");
+                accountPhone = user != null ? user.optString("phone", phone) : phone;
+                displayName = user != null ? user.optString("name", finalName) : finalName;
+                prefs.edit()
+                        .putString("accountToken", accountToken)
+                        .putString("accountPhone", accountPhone)
+                        .putString("displayName", displayName)
+                        .apply();
+                main.post(() -> {
+                    if ("elder".equals(afterRole)) {
+                        showElder();
+                    } else if ("family".equals(afterRole)) {
+                        showFamily();
+                    } else {
+                        showProfile();
+                        setStatus("登录成功。");
+                    }
+                });
+            } catch (Exception e) {
+                main.post(() -> {
+                    restoreButton(sourceButton);
+                    setStatus("登录失败：" + friendlyError(e));
+                });
+            }
+        });
+    }
+
     private void createInvite(Button sourceButton) {
         if (inviteInProgress) {
             return;
@@ -1284,6 +1517,7 @@ public class MainActivity extends Activity {
                 JSONObject payload = new JSONObject()
                         .put("pairCode", pairCode)
                         .put("elderName", displayName)
+                        .put("accountToken", accountToken)
                         .put("deviceName", Build.MANUFACTURER + " " + Build.MODEL)
                         .put("deviceId", deviceId)
                         .put("authToken", "elder".equals(memberRole) ? authToken : "");
@@ -1296,6 +1530,7 @@ public class MainActivity extends Activity {
                         .putString("authToken", authToken)
                         .putString("memberRole", memberRole)
                         .putString("pendingInviteCode", inviteCode)
+                        .remove("lastBindApprovalPromptId")
                         .putBoolean("familyBound", familyMemberCount > 0)
                         .apply();
                 main.post(() -> showElderInvite(inviteCode));
@@ -1326,9 +1561,22 @@ public class MainActivity extends Activity {
                 JSONObject payload = new JSONObject()
                         .put("pairCode", pairCode)
                         .put("inviteCode", inviteCode)
+                        .put("accountToken", accountToken)
                         .put("familyName", displayName)
                         .put("deviceId", deviceId);
                 JSONObject result = postJsonWithRelayFallback("/api/bind", payload);
+                if (result.optBoolean("pendingApproval", false)) {
+                    String pendingToken = result.optString("pendingToken", "");
+                    String pendingPairCode = result.optString("pairCode", pairCode);
+                    prefs.edit()
+                            .putString("pendingBindToken", pendingToken)
+                            .putString("pendingBindPairCode", pendingPairCode)
+                            .putString("pairCode", pendingPairCode)
+                            .apply();
+                    pairCode = pendingPairCode;
+                    main.post(() -> showFamilyBindPending());
+                    return;
+                }
                 authToken = result.optString("authToken", "");
                 pairCode = result.optString("pairCode", pairCode);
                 memberRole = "family";
@@ -2131,6 +2379,18 @@ public class MainActivity extends Activity {
                 int familyCount = boundFamilyCount(family);
                 boolean invitePending = family != null && family.optBoolean("invitePending", false);
                 boolean supportsMultipleFamily = family != null && family.has("familyMemberCount");
+                org.json.JSONArray pendingRequests = family != null ? family.optJSONArray("pendingBindRequests") : null;
+                if (pendingRequests != null && pendingRequests.length() > 0) {
+                    JSONObject pending = pendingRequests.optJSONObject(0);
+                    if (pending != null) {
+                        String requestId = pending.optString("id", "");
+                        String lastPrompted = prefs.getString("lastBindApprovalPromptId", "");
+                        if (!requestId.isEmpty() && !requestId.equals(lastPrompted)) {
+                            prefs.edit().putString("lastBindApprovalPromptId", requestId).apply();
+                            main.post(() -> showPendingBindApproval(pending));
+                        }
+                    }
+                }
                 if (familyCount > 0) {
                     prefs.edit()
                             .putBoolean("familyBound", true)
@@ -2156,6 +2416,39 @@ public class MainActivity extends Activity {
                     return;
                 }
                 main.post(() -> setStatus("正在等待家属绑定。网络检查失败：" + e.getMessage()));
+            }
+        });
+    }
+
+    private void showPendingBindApproval(JSONObject pending) {
+        String requestId = pending.optString("id", "");
+        String name = pending.optString("requesterName", "家属");
+        String phone = pending.optString("requesterPhone", "");
+        new AlertDialog.Builder(this)
+                .setTitle("确认添加家属")
+                .setMessage(name + (phone.isEmpty() ? "" : "（" + phone + "）") + " 想绑定为你的家属。确认后，对方可以在你求助时接收请求。")
+                .setPositiveButton("同意绑定", (dialog, which) -> confirmPendingBind(requestId, true))
+                .setNegativeButton("不同意", (dialog, which) -> confirmPendingBind(requestId, false))
+                .show();
+    }
+
+    private void confirmPendingBind(String requestId, boolean approved) {
+        if (requestId == null || requestId.isEmpty()) {
+            return;
+        }
+        statusIo.execute(() -> {
+            try {
+                JSONObject result = NetworkClient.postJson(baseUrl, "/api/bind/confirm", new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken)
+                        .put("requestId", requestId)
+                        .put("approved", approved));
+                JSONObject family = result.optJSONObject("family");
+                int familyCount = boundFamilyCount(family);
+                prefs.edit().putBoolean("familyBound", familyCount > 0).apply();
+                main.post(() -> setStatus(approved ? "已同意绑定。家属现在可以接收你的求助。" : "已拒绝本次绑定申请。"));
+            } catch (Exception e) {
+                main.post(() -> setStatus("处理绑定申请失败：" + friendlyError(e)));
             }
         });
     }
@@ -2517,6 +2810,18 @@ public class MainActivity extends Activity {
         return true;
     }
 
+    private boolean isLoggedIn() {
+        return accountToken != null && !accountToken.isEmpty();
+    }
+
+    private boolean ensureLoggedIn(String afterRole) {
+        if (isLoggedIn()) {
+            return true;
+        }
+        showLogin(afterRole);
+        return false;
+    }
+
     private boolean isBoundAs(String role) {
         return !authToken.isEmpty() && role.equals(memberRole);
     }
@@ -2759,11 +3064,12 @@ public class MainActivity extends Activity {
     }
 
     private String bindingStatusText() {
+        String login = isLoggedIn() ? "账号：" + accountPhone + "。" : "账号：未登录。";
         if (authToken.isEmpty()) {
-            return "绑定状态：未绑定。";
+            return login + "\n绑定状态：未绑定。";
         }
         String role = "elder".equals(memberRole) ? "长辈" : "家属";
-        return "绑定状态：已绑定为" + role + "。";
+        return login + "\n绑定状态：已绑定为" + role + "。";
     }
 
     private String appVersionText() {

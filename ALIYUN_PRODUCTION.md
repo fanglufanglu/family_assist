@@ -49,6 +49,35 @@ chmod +x scripts/install-aliyun-production.sh scripts/check-aliyun-production.sh
 TURN_PASSWORD='替换成一串长随机密码' bash scripts/install-aliyun-production.sh
 ```
 
+## PostgreSQL 与每日备份
+
+账号体系、亲属关系和审计记录正式化后，建议准备 PostgreSQL。当前脚本会安装 PostgreSQL、创建数据库、导入表结构，并配置每天凌晨 03:17 自动备份，备份保留 14 天。
+
+```bash
+cd /opt/family_assist
+git pull
+chmod +x scripts/install-postgres-backup.sh
+DB_PASSWORD='替换成一串长随机密码，只用字母数字更稳妥' bash scripts/install-postgres-backup.sh
+```
+
+备份路径：
+
+```text
+/var/backups/family-assist-postgres
+```
+
+手动备份：
+
+```bash
+/usr/local/bin/family-assist-pg-backup
+```
+
+查看备份：
+
+```bash
+ls -lh /var/backups/family-assist-postgres
+```
+
 验证：
 
 ```bash
@@ -68,11 +97,19 @@ bash scripts/check-aliyun-production.sh
 
 ## 数据持久化
 
-relay 会把非屏幕内容状态保存到：
+当前 relay 会把非屏幕内容状态保存到：
 
 ```text
 /var/lib/family-assist-relay/relay-state.json
 ```
+
+PostgreSQL 表结构已经准备在：
+
+```text
+db/schema.sql
+```
+
+下一步可把 relay 的账号、亲属、审计存储从 JSON 状态文件切换到 PostgreSQL。切换前，JSON 状态文件仍是线上实际数据源。
 
 保存内容：
 

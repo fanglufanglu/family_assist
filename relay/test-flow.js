@@ -46,6 +46,39 @@ async function waitUntilReady() {
 async function run() {
   await waitUntilReady();
   const pairCode = "regression001";
+  const elderAccount = await post("/api/account/login", { phone: "13800000001", code: "123456", name: "妈妈" });
+  const familyAccount = await post("/api/account/login", { phone: "13800000002", code: "123456", name: "女儿" });
+  assert(elderAccount.status === 200 && elderAccount.body.accountToken, "elder account should log in");
+  assert(familyAccount.status === 200 && familyAccount.body.accountToken, "family account should log in");
+
+  const securePairCode = "secure-regression001";
+  const secureInvite = await post("/api/invite", {
+    pairCode: securePairCode,
+    elderName: "妈妈",
+    deviceId: "secure-elder-1",
+    accountToken: elderAccount.body.accountToken,
+  });
+  assert(secureInvite.status === 200, "logged-in elder should create a secure invite");
+  const secureBind = await post("/api/bind", {
+    pairCode: securePairCode,
+    inviteCode: secureInvite.body.inviteCode,
+    familyName: "女儿",
+    deviceId: "secure-family-1",
+    accountToken: familyAccount.body.accountToken,
+  });
+  assert(secureBind.status === 200 && secureBind.body.pendingApproval, "logged-in family binding should wait for elder approval");
+  const secureStatus = await get(`/api/bind/status?pairCode=${securePairCode}&authToken=${secureInvite.body.authToken}`);
+  const requestId = secureStatus.body.family.pendingBindRequests[0].id;
+  const secureConfirm = await post("/api/bind/confirm", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    requestId,
+    approved: true,
+  });
+  assert(secureConfirm.status === 200 && secureConfirm.body.approved, "elder should approve the family binding");
+  const pendingDone = await get(`/api/bind/pending?pairCode=${securePairCode}&pendingToken=${secureBind.body.pendingToken}&accountToken=${familyAccount.body.accountToken}`);
+  assert(pendingDone.status === 200 && pendingDone.body.approved && pendingDone.body.authToken, "family should receive auth token after approval");
+
   const invite = await post("/api/invite", { pairCode, elderName: "妈妈", deviceId: "elder-1" });
   assert(invite.status === 200, "elder should create an invite");
 

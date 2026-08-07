@@ -7,6 +7,7 @@ const crypto = require("crypto");
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || "0.0.0.0";
 const families = new Map();
+const users = new Map();
 const MAX_FAMILY_MEMBERS = 5;
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES || 8 * 1024 * 1024);
 const DATA_DIR = process.env.RELAY_DATA_DIR || path.join(__dirname, "..", ".data");
@@ -87,6 +88,7 @@ function newFamily() {
     lastControlActionAtMs: 0,
     activeHelperToken: "",
     activeHelperName: "",
+    pendingBindRequests: [],
     audit: [],
     crashes: [],
     webrtc: {
@@ -111,6 +113,24 @@ function makeSessionId() {
   return crypto.randomBytes(12).toString("hex");
 }
 
+function makeId(prefix) {
+  return `${prefix}_${crypto.randomBytes(10).toString("hex")}`;
+}
+
+function userForToken(accountToken) {
+  return accountToken ? users.get(accountToken) : null;
+}
+
+function publicUser(user) {
+  if (!user) return null;
+  return {
+    id: user.id,
+    phone: user.phone,
+    name: user.name,
+    createdAt: user.createdAt,
+  };
+}
+
 function iceConfig() {
   const urls = String(process.env.TURN_URLS || "")
     .split(",")
@@ -133,6 +153,7 @@ function familyMembers(family) {
 
 function publicFamily(family, member, authToken) {
   const relatives = familyMembers(family);
+  const pendingBindRequests = Array.isArray(family.pendingBindRequests) ? family.pendingBindRequests : [];
   return {
     active: family.active,
     sessionId: family.sessionId,
@@ -156,6 +177,16 @@ function publicFamily(family, member, authToken) {
     helperJoined: Boolean(family.activeHelperToken),
     helperIsCurrent: Boolean(authToken) && family.activeHelperToken === authToken,
     helperName: family.activeHelperName,
+    pendingBindCount: pendingBindRequests.length,
+    pendingBindRequests: member && member.role === "elder"
+      ? pendingBindRequests.map((item) => ({
+        id: item.id,
+        requesterName: item.requesterName,
+        requesterPhone: item.requesterPhone,
+        createdAt: item.createdAt,
+        expiresAt: item.expiresAt,
+      }))
+      : [],
   };
 }
 
@@ -222,6 +253,7 @@ function serializeFamily(family) {
     sessionId: "",
     activeHelperToken: "",
     activeHelperName: "",
+    pendingBindRequests: (family.pendingBindRequests || []).filter((item) => Date.now() <= Number(item.expiresAt || 0)),
     members: [...family.members.entries()],
     webrtc: {
       offer: null,
@@ -236,6 +268,9 @@ function serializeFamily(family) {
 function hydrateFamily(raw) {
   const family = { ...newFamily(), ...(raw || {}) };
   family.members = new Map(Array.isArray(raw && raw.members) ? raw.members : []);
+  family.pendingBindRequests = Array.isArray(raw && raw.pendingBindRequests)
+    ? raw.pendingBindRequests.filter((item) => Date.now() <= Number(item.expiresAt || 0))
+    : [];
   family.frame = null;
   family.annotation = null;
   family.controlAction = null;
@@ -261,7 +296,11 @@ function loadState() {
     for (const [pairCode, rawFamily] of entries) {
       if (pairCode) families.set(pairCode, hydrateFamily(rawFamily));
     }
-    console.log(`Loaded ${families.size} persisted families from ${STATE_FILE}`);
+    const userEntries = Array.isArray(parsed.users) ? parsed.users : [];
+    for (const [token, user] of userEntries) {
+      if (token && user) users.set(token, user);
+    }
+    console.log(`Loaded ${families.size} persisted families and ${users.size} users from ${STATE_FILE}`);
   } catch (error) {
     console.error(`Failed to load relay state: ${error.message}`);
   }
@@ -273,6 +312,7 @@ function saveStateNow() {
     const payload = {
       version: 1,
       savedAt: new Date().toISOString(),
+      users: [...users.entries()],
       families: [...families.entries()].map(([pairCode, family]) => [pairCode, serializeFamily(family)]),
     };
     const tempFile = `${STATE_FILE}.tmp`;
@@ -335,6 +375,47 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/account/login") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const phone = String(payload.phone || "").replace(/[^\d+]/g, "").trim();
+      const code = String(payload.code || "").trim();
+      const name = String(payload.name || "").trim() || "亲友";
+      if (phone.length < 6 || phone.length > 18) {
+        sendJson(res, 400, { error: "valid phone is required" });
+        return;
+      }
+      if (!/^\d{4,6}$/.test(code)) {
+        sendJson(res, 400, { error: "valid verification code is required" });
+        return;
+      }
+      const existing = [...users.entries()].find(([, user]) => user.phone === phone);
+      const accountToken = existing ? existing[0] : makeToken();
+      const nowIso = new Date().toISOString();
+      const user = existing ? existing[1] : {
+        id: makeId("user"),
+        phone,
+        name,
+        createdAt: nowIso,
+      };
+      user.name = name;
+      user.lastLoginAt = nowIso;
+      users.set(accountToken, user);
+      scheduleSave();
+      sendJson(res, 200, { ok: true, accountToken, user: publicUser(user), devVerification: true });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/account/me") {
+      const accountToken = String(url.searchParams.get("accountToken") || "").trim();
+      const user = userForToken(accountToken);
+      if (!user) {
+        sendJson(res, 403, { error: "not logged in" });
+        return;
+      }
+      sendJson(res, 200, { ok: true, user: publicUser(user) });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/invite") {
       const payload = JSON.parse((await readBody(req)).toString("utf8"));
       const pairCode = String(payload.pairCode || "").trim();
@@ -343,6 +424,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const family = familyFor(pairCode);
+      const accountToken = String(payload.accountToken || "").trim();
+      const elderUser = userForToken(accountToken);
       const requestedToken = String(payload.authToken || "").trim();
       const existingElder = requestedToken ? family.members.get(requestedToken) : null;
       const retainingFamily = existingElder && existingElder.role === "elder";
@@ -365,6 +448,7 @@ const server = http.createServer(async (req, res) => {
       family.controlDecision = "idle";
       family.controlReason = "";
       family.controlAction = null;
+      family.pendingBindRequests = [];
       family.activeHelperToken = "";
       family.activeHelperName = "";
       family.audit = [];
@@ -384,6 +468,9 @@ const server = http.createServer(async (req, res) => {
         role: "elder",
         name: family.elderName,
         deviceId: String(payload.deviceId || ""),
+        accountToken,
+        userId: elderUser ? elderUser.id : "",
+        phone: elderUser ? elderUser.phone : "",
         createdAt: family.updatedAt,
       });
       audit(family, "invite_created", { elderName: family.elderName, familyMemberCount: familyMembers(family).length });
@@ -417,6 +504,47 @@ const server = http.createServer(async (req, res) => {
       }
       if (family.active) {
         sendJson(res, 409, { error: "assist session is active" });
+        return;
+      }
+      const accountToken = String(payload.accountToken || "").trim();
+      const requester = userForToken(accountToken);
+      if (requester) {
+        const existingPending = (family.pendingBindRequests || []).find((item) =>
+          item.accountToken === accountToken || (item.deviceId && item.deviceId === String(payload.deviceId || ""))
+        );
+        if (existingPending && Date.now() <= Number(existingPending.expiresAt || 0)) {
+          sendJson(res, 200, {
+            ok: true,
+            pendingApproval: true,
+            pendingToken: existingPending.pendingToken,
+            pairCode,
+            message: "waiting for elder approval",
+          });
+          return;
+        }
+        const pendingToken = makeToken();
+        family.pendingBindRequests = (family.pendingBindRequests || [])
+          .filter((item) => Date.now() <= Number(item.expiresAt || 0));
+        family.pendingBindRequests.push({
+          id: makeId("bind"),
+          pendingToken,
+          accountToken,
+          requesterUserId: requester.id,
+          requesterName: String(payload.familyName || requester.name || "家属"),
+          requesterPhone: requester.phone,
+          deviceId: String(payload.deviceId || ""),
+          createdAt: new Date().toISOString(),
+          expiresAt: Date.now() + 10 * 60 * 1000,
+        });
+        family.updatedAt = new Date().toISOString();
+        audit(family, "family_bind_requested", { name: String(payload.familyName || requester.name || "家属") });
+        sendJson(res, 200, {
+          ok: true,
+          pendingApproval: true,
+          pendingToken,
+          pairCode,
+          message: "waiting for elder approval",
+        });
         return;
       }
       const existing = familyMembers(family).find(([, member]) => member.deviceId && member.deviceId === String(payload.deviceId || ""));
@@ -459,6 +587,76 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/bind/confirm") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const requestId = String(payload.requestId || "").trim();
+      const approved = Boolean(payload.approved);
+      const result = requireMember(res, pairCode, authToken, "elder");
+      if (!result) return;
+      const family = result.family;
+      const pendingRequests = Array.isArray(family.pendingBindRequests) ? family.pendingBindRequests : [];
+      const index = pendingRequests.findIndex((item) => item.id === requestId && Date.now() <= Number(item.expiresAt || 0));
+      if (index < 0) {
+        sendJson(res, 404, { error: "pending request not found" });
+        return;
+      }
+      const request = pendingRequests[index];
+      pendingRequests.splice(index, 1);
+      family.pendingBindRequests = pendingRequests;
+      if (!approved) {
+        family.updatedAt = new Date().toISOString();
+        audit(family, "family_bind_rejected", { name: request.requesterName, phone: request.requesterPhone });
+        sendJson(res, 200, { ok: true, approved: false, family: publicFamily(family, result.member, authToken) });
+        return;
+      }
+      if (family.active) {
+        sendJson(res, 409, { error: "assist session is active" });
+        return;
+      }
+      if (familyMembers(family).length >= MAX_FAMILY_MEMBERS) {
+        sendJson(res, 409, { error: "family member limit reached", maxFamilyMembers: MAX_FAMILY_MEMBERS });
+        return;
+      }
+      const familyToken = makeToken();
+      family.members.set(familyToken, {
+        role: "family",
+        name: request.requesterName || "家属",
+        deviceId: request.deviceId || "",
+        accountToken: request.accountToken || "",
+        userId: request.requesterUserId || "",
+        phone: request.requesterPhone || "",
+        createdAt: new Date().toISOString(),
+      });
+      family.updatedAt = new Date().toISOString();
+      audit(family, "family_bind_approved", { name: request.requesterName, phone: request.requesterPhone });
+      sendJson(res, 200, { ok: true, approved: true, familyMemberCount: familyMembers(family).length, family: publicFamily(family, result.member, authToken) });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/bind/pending") {
+      const pairCode = String(url.searchParams.get("pairCode") || "").trim();
+      const pendingToken = String(url.searchParams.get("pendingToken") || "").trim();
+      const family = pairCode ? families.get(pairCode) : null;
+      if (!family || !pendingToken) {
+        sendJson(res, 404, { error: "pending request not found" });
+        return;
+      }
+      const pending = (family.pendingBindRequests || []).find((item) => item.pendingToken === pendingToken);
+      if (pending && Date.now() <= Number(pending.expiresAt || 0)) {
+        sendJson(res, 200, { ok: true, pendingApproval: true, expiresAt: pending.expiresAt });
+        return;
+      }
+      const member = familyMembers(family).find(([, item]) => item.accountToken && item.accountToken === String(url.searchParams.get("accountToken") || "").trim());
+      if (member) {
+        sendJson(res, 200, { ok: true, approved: true, pairCode, authToken: member[0], familyMemberCount: familyMembers(family).length });
+        return;
+      }
+      sendJson(res, 403, { error: "binding was not approved or expired" });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/invite/cancel") {
       const payload = JSON.parse((await readBody(req)).toString("utf8"));
       const pairCode = String(payload.pairCode || "").trim();
@@ -478,6 +676,13 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(url.searchParams.get("authToken") || "").trim();
       const result = requireMember(res, pairCode, authToken);
       if (!result) return;
+      if (Array.isArray(result.family.pendingBindRequests)) {
+        const before = result.family.pendingBindRequests.length;
+        result.family.pendingBindRequests = result.family.pendingBindRequests.filter((item) => Date.now() <= Number(item.expiresAt || 0));
+        if (result.family.pendingBindRequests.length !== before) {
+          audit(result.family, "expired_bind_requests_cleaned", { count: before - result.family.pendingBindRequests.length });
+        }
+      }
       sendJson(res, 200, { ok: true, member: result.member, family: publicFamily(result.family, result.member, authToken) });
       return;
     }
