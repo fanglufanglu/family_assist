@@ -202,15 +202,15 @@ public class MainActivity extends Activity {
         }
     };
 
-    private static final int COLOR_BG = 0xFFF5F8F6;
+    private static final int COLOR_BG = 0xFFFFF8FA;
     private static final int COLOR_SURFACE = 0xFFFFFFFF;
-    private static final int COLOR_TEXT = 0xFF18231F;
-    private static final int COLOR_MUTED = 0xFF66736D;
-    private static final int COLOR_LINE = 0xFFDCE5E0;
-    private static final int COLOR_BLUE = 0xFF246B5D;
-    private static final int COLOR_BLUE_DARK = 0xFF145548;
-    private static final int COLOR_RED = 0xFFD64F45;
-    private static final int COLOR_WARM = 0xFFFFEEE8;
+    private static final int COLOR_TEXT = 0xFF2B2225;
+    private static final int COLOR_MUTED = 0xFF74666B;
+    private static final int COLOR_LINE = 0xFFECDDE1;
+    private static final int COLOR_BLUE = 0xFFE84B67;
+    private static final int COLOR_BLUE_DARK = 0xFFB72C49;
+    private static final int COLOR_RED = 0xFFD9364F;
+    private static final int COLOR_WARM = 0xFFFFEDF2;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -3811,14 +3811,14 @@ public class MainActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(16), dp(14), dp(16), dp(14));
-        panel.setBackground(rounded(0xFFEAF3F0, dp(8), 0xFFCFE1DB));
+        panel.setBackground(rounded(0xFFFFEEF3, dp(8), 0xFFF2CCD6));
         LinearLayout.LayoutParams params = fullWidthParams();
         params.setMargins(0, 0, 0, dp(12));
         panel.setLayoutParams(params);
         TextView headingView = sectionTitle(heading);
         headingView.setTextColor(COLOR_BLUE_DARK);
         TextView messageView = caption(message + "\n看屏幕  ·  画圈提示  ·  授权后远程操作");
-        messageView.setTextColor(0xFF45645B);
+        messageView.setTextColor(0xFF76515C);
         messageView.setPadding(0, 0, 0, 0);
         panel.addView(headingView);
         panel.addView(messageView);
@@ -4047,7 +4047,7 @@ public class MainActivity extends Activity {
     private Button secondaryButton(String text) {
         Button button = primaryButton(text);
         button.setTextColor(COLOR_BLUE_DARK);
-        button.setBackground(rounded(0xFFF4F7FB, dp(8), 0xFFCAD5E3));
+        button.setBackground(rounded(0xFFFFF4F7, dp(8), 0xFFE7C7D0));
         return button;
     }
 

@@ -37,7 +37,7 @@ final class AssistNotifier {
         channel.enableVibration(true);
         channel.setVibrationPattern(new long[]{0, 350, 180, 350});
         channel.enableLights(true);
-        channel.setLightColor(0xFF2563EB);
+        channel.setLightColor(0xFFE84B67);
         channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
         channel.setSound(
                 RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION),
@@ -103,7 +103,7 @@ final class AssistNotifier {
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
                 .setCategory(Notification.CATEGORY_CALL)
-                .setColor(0xFF2563EB)
+                .setColor(0xFFE84B67)
                 .setStyle(new Notification.BigTextStyle()
                         .bigText("点这里回到亲情帮帮，确认是否允许本次远程操作。"))
                 .setPriority(Notification.PRIORITY_HIGH)
