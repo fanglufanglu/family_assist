@@ -37,28 +37,28 @@ public class GenerateLogoAssets {
         g.fill(new RoundRectangle2D.Double(0, 0, size, size, 232 * s, 232 * s));
 
         Path2D heart = new Path2D.Double();
-        heart.moveTo(512 * s, 790 * s);
-        heart.curveTo(455 * s, 733 * s, 256 * s, 607 * s, 256 * s, 436 * s);
-        heart.curveTo(256 * s, 322 * s, 341 * s, 256 * s, 436 * s, 256 * s);
-        heart.curveTo(483 * s, 256 * s, 512 * s, 284 * s, 512 * s, 332 * s);
-        heart.curveTo(512 * s, 284 * s, 550 * s, 256 * s, 597 * s, 256 * s);
-        heart.curveTo(692 * s, 256 * s, 768 * s, 322 * s, 768 * s, 436 * s);
-        heart.curveTo(768 * s, 607 * s, 569 * s, 733 * s, 512 * s, 790 * s);
+        heart.moveTo(512 * s, 825 * s);
+        heart.curveTo(446 * s, 768 * s, 190 * s, 607 * s, 190 * s, 398 * s);
+        heart.curveTo(190 * s, 256 * s, 294 * s, 180 * s, 417 * s, 180 * s);
+        heart.curveTo(474 * s, 180 * s, 512 * s, 218 * s, 512 * s, 275 * s);
+        heart.curveTo(512 * s, 218 * s, 550 * s, 180 * s, 607 * s, 180 * s);
+        heart.curveTo(730 * s, 180 * s, 834 * s, 256 * s, 834 * s, 398 * s);
+        heart.curveTo(834 * s, 607 * s, 578 * s, 768 * s, 512 * s, 825 * s);
         heart.closePath();
         g.setColor(c(0xfff8f6));
         g.fill(heart);
 
-        drawPhone(g, 322 * s, 389 * s, 171 * s, 303 * s, c(0x356ae6), s);
-        drawPhone(g, 531 * s, 389 * s, 171 * s, 303 * s, c(0xf2556f), s);
+        drawPhone(g, 341 * s, 360 * s, 142 * s, 256 * s, c(0x356ae6), s);
+        drawPhone(g, 541 * s, 360 * s, 142 * s, 256 * s, c(0xf2556f), s);
 
         Path2D linkHeart = new Path2D.Double();
-        linkHeart.moveTo(512 * s, 607 * s);
-        linkHeart.curveTo(493 * s, 588 * s, 465 * s, 569 * s, 465 * s, 541 * s);
-        linkHeart.curveTo(465 * s, 522 * s, 479 * s, 512 * s, 493 * s, 512 * s);
-        linkHeart.curveTo(504 * s, 512 * s, 512 * s, 522 * s, 512 * s, 531 * s);
-        linkHeart.curveTo(512 * s, 522 * s, 520 * s, 512 * s, 531 * s, 512 * s);
-        linkHeart.curveTo(545 * s, 512 * s, 559 * s, 522 * s, 559 * s, 541 * s);
-        linkHeart.curveTo(559 * s, 569 * s, 531 * s, 588 * s, 512 * s, 607 * s);
+        linkHeart.moveTo(512 * s, 560 * s);
+        linkHeart.curveTo(495 * s, 545 * s, 470 * s, 528 * s, 470 * s, 503 * s);
+        linkHeart.curveTo(470 * s, 486 * s, 482 * s, 476 * s, 495 * s, 476 * s);
+        linkHeart.curveTo(505 * s, 476 * s, 512 * s, 484 * s, 512 * s, 493 * s);
+        linkHeart.curveTo(512 * s, 484 * s, 519 * s, 476 * s, 529 * s, 476 * s);
+        linkHeart.curveTo(542 * s, 476 * s, 554 * s, 486 * s, 554 * s, 503 * s);
+        linkHeart.curveTo(554 * s, 528 * s, 529 * s, 545 * s, 512 * s, 560 * s);
         linkHeart.closePath();
         g.setColor(c(0xf2a23a));
         g.fill(linkHeart);
@@ -83,10 +83,10 @@ public class GenerateLogoAssets {
         g.fill(new RoundRectangle2D.Double(x, y, w, h, 42 * scale, 42 * scale));
         g.setColor(c(0xfff8f6));
         g.fill(new RoundRectangle2D.Double(
-                x + 38 * scale, y + 47 * scale, w - 76 * scale, h - 132 * scale,
+                x + 28 * scale, y + 38 * scale, w - 56 * scale, h - 112 * scale,
                 8 * scale, 8 * scale));
         g.fill(new Ellipse2D.Double(
-                x + (w / 2) - 14 * scale, y + h - 62 * scale, 28 * scale, 28 * scale));
+                x + (w / 2) - 12 * scale, y + h - 50 * scale, 24 * scale, 24 * scale));
     }
 
     private static Color c(int rgb) {
