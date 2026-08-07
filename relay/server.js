@@ -160,6 +160,26 @@ function publicUser(user) {
   };
 }
 
+function membershipsForAccount(accountToken) {
+  const memberships = [];
+  for (const [pairCode, family] of families.entries()) {
+    for (const [authToken, member] of family.members.entries()) {
+      if (member.accountToken !== accountToken) continue;
+      memberships.push({
+        pairCode,
+        authToken,
+        role: member.role,
+        name: member.name || "",
+        elderName: family.elderName || "长辈",
+        familyMemberCount: familyMembers(family).length,
+        active: Boolean(family.active),
+        updatedAt: family.updatedAt || "",
+      });
+    }
+  }
+  return memberships.sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+}
+
 function statePayload() {
   return {
     version: 2,
@@ -482,7 +502,7 @@ const server = http.createServer(async (req, res) => {
       };
       users.set(accountToken, user);
       scheduleSave();
-      sendJson(res, 200, { ok: true, accountToken, user: publicUser(user) });
+      sendJson(res, 200, { ok: true, accountToken, user: publicUser(user), memberships: [] });
       return;
     }
 
@@ -506,13 +526,15 @@ const server = http.createServer(async (req, res) => {
       const accountToken = existing[0];
       const user = existing[1];
       const nowIso = new Date().toISOString();
-      if (String(payload.name || "").trim()) {
-        user.name = String(payload.name || "").trim();
-      }
       user.lastLoginAt = nowIso;
       users.set(accountToken, user);
       scheduleSave();
-      sendJson(res, 200, { ok: true, accountToken, user: publicUser(user) });
+      sendJson(res, 200, {
+        ok: true,
+        accountToken,
+        user: publicUser(user),
+        memberships: membershipsForAccount(accountToken),
+      });
       return;
     }
 
@@ -523,7 +545,11 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 403, { error: "not logged in" });
         return;
       }
-      sendJson(res, 200, { ok: true, user: publicUser(user) });
+      sendJson(res, 200, {
+        ok: true,
+        user: publicUser(user),
+        memberships: membershipsForAccount(accountToken),
+      });
       return;
     }
 

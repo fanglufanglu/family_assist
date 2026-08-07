@@ -82,6 +82,12 @@ async function run() {
   assert(secureConfirm.status === 200 && secureConfirm.body.approved, "elder should approve the family binding");
   const pendingDone = await get(`/api/bind/pending?pairCode=${securePairCode}&pendingToken=${secureBind.body.pendingToken}&accountToken=${familyAccount.body.accountToken}`);
   assert(pendingDone.status === 200 && pendingDone.body.approved && pendingDone.body.authToken, "family should receive auth token after approval");
+  const elderRelogin = await post("/api/account/login", { phone: "13800000001", password: "elderPass123" });
+  const familyRelogin = await post("/api/account/login", { phone: "13800000002", password: "familyPass123" });
+  assert(elderRelogin.body.memberships.some((item) => item.role === "elder" && item.pairCode === securePairCode),
+    "elder login should restore an existing family membership");
+  assert(familyRelogin.body.memberships.some((item) => item.role === "family" && item.pairCode === securePairCode),
+    "family login should restore an existing family membership");
 
   const invite = await post("/api/invite", { pairCode, elderName: "妈妈", deviceId: "elder-1" });
   assert(invite.status === 200, "elder should create an invite");
