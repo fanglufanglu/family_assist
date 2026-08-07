@@ -32,7 +32,7 @@ public class GenerateLogoAssets {
         g.setPaint(new LinearGradientPaint(
                 0, 0, size, size,
                 new float[]{0f, 0.52f, 1f},
-                new Color[]{c(0xff6b5f), c(0xf0447d), c(0x6758c8)}));
+                new Color[]{c(0x7a2048), c(0x69265f), c(0x3f2b72)}));
         g.fill(new RoundRectangle2D.Double(0, 0, size, size, 232 * s, 232 * s));
 
         drawPhone(g, 256 * s, 275 * s, 228 * s, 448 * s, c(0x356ae6), s);
@@ -47,7 +47,11 @@ public class GenerateLogoAssets {
         linkHeart.curveTo(566 * s, 475 * s, 587 * s, 492 * s, 587 * s, 521 * s);
         linkHeart.curveTo(587 * s, 563 * s, 543 * s, 593 * s, 512 * s, 620 * s);
         linkHeart.closePath();
-        g.setColor(c(0xf2a23a));
+        g.setPaint(new LinearGradientPaint(
+                (float) (437 * s), (float) (475 * s),
+                (float) (587 * s), (float) (620 * s),
+                new float[]{0f, 0.52f, 1f},
+                new Color[]{c(0xff6b5f), c(0xf0447d), c(0x6758c8)}));
         g.fill(linkHeart);
         g.dispose();
         return image;
