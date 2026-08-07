@@ -40,13 +40,14 @@ https://api.qinqingbangbang.com
 
 ## 首次部署
 
-在 ECS Workbench 终端执行：
+在 ECS Workbench 终端执行。正式环境建议先完成 PostgreSQL，再启动 relay：
 
 ```bash
 cd /opt/family_assist
 git pull
 chmod +x scripts/install-aliyun-production.sh scripts/check-aliyun-production.sh
-TURN_PASSWORD='替换成一串长随机密码' bash scripts/install-aliyun-production.sh
+DB_PASSWORD='替换成数据库长随机密码' bash scripts/install-postgres-backup.sh
+TURN_PASSWORD='替换成TURN长随机密码' DB_PASSWORD='同上数据库密码' bash scripts/install-aliyun-production.sh
 ```
 
 ## PostgreSQL 与每日备份
@@ -97,19 +98,25 @@ bash scripts/check-aliyun-production.sh
 
 ## 数据持久化
 
-当前 relay 会把非屏幕内容状态保存到：
+当 `DATABASE_URL` 已配置时，relay 会把账号、亲属绑定、邀请确认、会话审计等状态保存到 PostgreSQL。`scripts/install-aliyun-production.sh` 在传入 `DB_PASSWORD` 时会自动写入：
 
 ```text
-/var/lib/family-assist-relay/relay-state.json
+DATABASE_URL=postgresql://family_assist:你的密码@127.0.0.1:5432/family_assist
 ```
 
-PostgreSQL 表结构已经准备在：
+PostgreSQL 表结构在：
 
 ```text
 db/schema.sql
 ```
 
-下一步可把 relay 的账号、亲属、审计存储从 JSON 状态文件切换到 PostgreSQL。切换前，JSON 状态文件仍是线上实际数据源。
+如果未配置 `DATABASE_URL`，relay 才会回退到本地 JSON 状态文件：
+
+```text
+/var/lib/family-assist-relay/relay-state.json
+```
+
+正式环境不要依赖 JSON 回退。
 
 保存内容：
 

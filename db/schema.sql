@@ -2,9 +2,20 @@ CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
     phone TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
+    password_hash TEXT,
+    account_token TEXT UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_login_at TIMESTAMPTZ
 );
+
+CREATE TABLE IF NOT EXISTS relay_state (
+    id TEXT PRIMARY KEY,
+    payload JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS account_token TEXT UNIQUE;
 
 CREATE TABLE IF NOT EXISTS devices (
     id TEXT PRIMARY KEY,

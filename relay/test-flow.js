@@ -4,7 +4,7 @@ const port = 8796;
 const baseUrl = `http://127.0.0.1:${port}`;
 const relay = spawn(process.execPath, ["server.js"], {
   cwd: __dirname,
-  env: { ...process.env, HOST: "127.0.0.1", PORT: String(port) },
+  env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), RELAY_DATA_DIR: `/tmp/family-assist-relay-test-${process.pid}` },
   stdio: ["ignore", "pipe", "inherit"],
 });
 
@@ -46,10 +46,14 @@ async function waitUntilReady() {
 async function run() {
   await waitUntilReady();
   const pairCode = "regression001";
-  const elderAccount = await post("/api/account/login", { phone: "13800000001", code: "123456", name: "妈妈" });
-  const familyAccount = await post("/api/account/login", { phone: "13800000002", code: "123456", name: "女儿" });
-  assert(elderAccount.status === 200 && elderAccount.body.accountToken, "elder account should log in");
-  assert(familyAccount.status === 200 && familyAccount.body.accountToken, "family account should log in");
+  const elderRegister = await post("/api/account/register", { phone: "13800000001", password: "elderPass123", name: "妈妈" });
+  const familyRegister = await post("/api/account/register", { phone: "13800000002", password: "familyPass123", name: "女儿" });
+  assert(elderRegister.status === 200 && elderRegister.body.accountToken, "elder account should register");
+  assert(familyRegister.status === 200 && familyRegister.body.accountToken, "family account should register");
+  const elderAccount = await post("/api/account/login", { phone: "13800000001", password: "elderPass123", name: "妈妈" });
+  const familyAccount = await post("/api/account/login", { phone: "13800000002", password: "familyPass123", name: "女儿" });
+  assert(elderAccount.status === 200 && elderAccount.body.accountToken, "elder account should log in with password");
+  assert(familyAccount.status === 200 && familyAccount.body.accountToken, "family account should log in with password");
 
   const securePairCode = "secure-regression001";
   const secureInvite = await post("/api/invite", {

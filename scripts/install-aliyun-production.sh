@@ -7,6 +7,9 @@ PUBLIC_IP="${PUBLIC_IP:-47.238.240.30}"
 PRIVATE_IP="${PRIVATE_IP:-172.29.103.233}"
 TURN_USER="${TURN_USER:-familyassist}"
 TURN_PASSWORD="${TURN_PASSWORD:-change-this-turn-password}"
+DB_NAME="${DB_NAME:-family_assist}"
+DB_USER="${DB_USER:-family_assist}"
+DB_PASSWORD="${DB_PASSWORD:-}"
 RELAY_DATA_DIR="${RELAY_DATA_DIR:-/var/lib/family-assist-relay}"
 
 if [[ "${TURN_PASSWORD}" == "change-this-turn-password" ]]; then
@@ -23,8 +26,16 @@ fi
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y git nginx nodejs npm coturn curl logrotate
 
+cd "${APP_DIR}"
+npm install --omit=dev
+
 mkdir -p "${RELAY_DATA_DIR}" /var/log/family-assist
 chmod 700 "${RELAY_DATA_DIR}"
+
+DATABASE_ENV_LINE=""
+if [[ -n "${DB_PASSWORD}" ]]; then
+  DATABASE_ENV_LINE="Environment=DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@127.0.0.1:5432/${DB_NAME}"
+fi
 
 cat >/etc/systemd/system/family-assist-relay.service <<EOF
 [Unit]
@@ -38,6 +49,7 @@ Environment=RELAY_DATA_DIR=${RELAY_DATA_DIR}
 Environment=TURN_URLS=turn:${PUBLIC_IP}:3478?transport=udp,turn:${PUBLIC_IP}:3478?transport=tcp
 Environment=TURN_USERNAME=${TURN_USER}
 Environment=TURN_CREDENTIAL=${TURN_PASSWORD}
+${DATABASE_ENV_LINE}
 ExecStart=/usr/bin/node relay/server.js
 Restart=always
 RestartSec=3

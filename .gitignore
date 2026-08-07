@@ -6,3 +6,4 @@ local.properties
 *.iml
 .tools/
 .data/
+node_modules/

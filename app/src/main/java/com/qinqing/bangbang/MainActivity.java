@@ -26,6 +26,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -464,32 +465,44 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         elderBindPolling = false;
         root = verticalRoot();
-        root.addView(hero("手机号登录", "保护亲属绑定和远程协助"));
-        status = notice("内测阶段请输入手机号和任意 4-6 位验证码。正式版会接入短信验证码。");
+        root.addView(hero("账号登录", "保护亲属绑定和远程协助"));
+        status = notice("请使用手机号和密码登录。首次使用请先注册。");
 
         EditText phoneInput = input("手机号", accountPhone);
-        EditText codeInput = input("验证码", "");
+        EditText passwordInput = input("密码", "");
+        passwordInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         EditText nameInput = input("我的称呼，例如 妈妈 / 女儿", displayName);
-        Button loginButton = primaryButton("登录并继续");
+        Button loginButton = primaryButton("登录");
+        Button registerButton = secondaryButton("注册新账号");
         Button backButton = secondaryButton("返回首页");
 
         loginButton.setOnClickListener(v -> loginAccount(
                 phoneInput.getText().toString().trim(),
-                codeInput.getText().toString().trim(),
+                passwordInput.getText().toString(),
                 nameInput.getText().toString().trim(),
                 afterRole,
+                false,
                 loginButton
+        ));
+        registerButton.setOnClickListener(v -> loginAccount(
+                phoneInput.getText().toString().trim(),
+                passwordInput.getText().toString(),
+                nameInput.getText().toString().trim(),
+                afterRole,
+                true,
+                registerButton
         ));
         backButton.setOnClickListener(v -> showSetup());
 
         LinearLayout loginCard = card("账号登录", "");
         loginCard.addView(label("手机号"));
         loginCard.addView(phoneInput);
-        loginCard.addView(label("验证码"));
-        loginCard.addView(codeInput);
+        loginCard.addView(label("密码"));
+        loginCard.addView(passwordInput);
         loginCard.addView(label("称呼"));
         loginCard.addView(nameInput);
         loginCard.addView(loginButton);
+        loginCard.addView(registerButton);
         loginCard.addView(backButton);
         root.addView(loginCard);
         root.addView(status);
@@ -1459,22 +1472,26 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void loginAccount(String phone, String code, String name, String afterRole, Button sourceButton) {
-        if (phone.isEmpty() || code.isEmpty()) {
-            setStatus("请输入手机号和验证码。");
+    private void loginAccount(String phone, String password, String name, String afterRole, boolean register, Button sourceButton) {
+        if (phone.isEmpty() || password.isEmpty()) {
+            setStatus("请输入手机号和密码。");
+            return;
+        }
+        if (password.length() < 6) {
+            setStatus("密码至少 6 位。");
             return;
         }
         if (name.isEmpty()) {
             name = "亲友";
         }
         final String finalName = name;
-        setButtonBusy(sourceButton, "登录中...");
-        setStatus("正在登录...");
+        setButtonBusy(sourceButton, register ? "注册中..." : "登录中...");
+        setStatus(register ? "正在注册..." : "正在登录...");
         statusIo.execute(() -> {
             try {
-                JSONObject result = NetworkClient.postJson(baseUrl, "/api/account/login", new JSONObject()
+                JSONObject result = NetworkClient.postJson(baseUrl, register ? "/api/account/register" : "/api/account/login", new JSONObject()
                         .put("phone", phone)
-                        .put("code", code)
+                        .put("password", password)
                         .put("name", finalName));
                 accountToken = result.optString("accountToken", "");
                 JSONObject user = result.optJSONObject("user");
@@ -1492,13 +1509,13 @@ public class MainActivity extends Activity {
                         showFamily();
                     } else {
                         showProfile();
-                        setStatus("登录成功。");
+                        setStatus(register ? "注册成功。" : "登录成功。");
                     }
                 });
             } catch (Exception e) {
                 main.post(() -> {
                     restoreButton(sourceButton);
-                    setStatus("登录失败：" + friendlyError(e));
+                    setStatus((register ? "注册失败：" : "登录失败：") + friendlyError(e));
                 });
             }
         });

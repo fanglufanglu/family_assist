@@ -3,6 +3,11 @@ const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
 const crypto = require("crypto");
+let PgPool = null;
+try {
+  PgPool = require("pg").Pool;
+} catch (_) {
+}
 
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || "0.0.0.0";
@@ -15,7 +20,14 @@ const STATE_FILE = process.env.RELAY_STATE_FILE || path.join(DATA_DIR, "relay-st
 const SAVE_DEBOUNCE_MS = 250;
 const CONTROL_REQUEST_COOLDOWN_MS = 15_000;
 const CONTROL_ACTION_COOLDOWN_MS = 120;
+const DATABASE_URL = process.env.DATABASE_URL || process.env.FAMILY_ASSIST_DATABASE_URL || "";
+const STATE_ID = "main";
+const PASSWORD_ITERATIONS = 120000;
+const PASSWORD_KEY_LEN = 32;
+const PASSWORD_DIGEST = "sha256";
+const pgPool = DATABASE_URL && PgPool ? new PgPool({ connectionString: DATABASE_URL }) : null;
 let saveTimer = null;
+let storageReady = false;
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -117,6 +129,23 @@ function makeId(prefix) {
   return `${prefix}_${crypto.randomBytes(10).toString("hex")}`;
 }
 
+function hashPassword(password, salt) {
+  const actualSalt = salt || crypto.randomBytes(16).toString("base64url");
+  const hash = crypto.pbkdf2Sync(String(password), actualSalt, PASSWORD_ITERATIONS, PASSWORD_KEY_LEN, PASSWORD_DIGEST).toString("base64url");
+  return `pbkdf2_${PASSWORD_DIGEST}$${PASSWORD_ITERATIONS}$${actualSalt}$${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  const parts = String(stored || "").split("$");
+  if (parts.length !== 4 || parts[0] !== `pbkdf2_${PASSWORD_DIGEST}`) return false;
+  const iterations = Number(parts[1]);
+  const salt = parts[2];
+  const expected = parts[3];
+  if (!Number.isFinite(iterations) || !salt || !expected) return false;
+  const actual = crypto.pbkdf2Sync(String(password), salt, iterations, PASSWORD_KEY_LEN, PASSWORD_DIGEST).toString("base64url");
+  return crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+}
+
 function userForToken(accountToken) {
   return accountToken ? users.get(accountToken) : null;
 }
@@ -129,6 +158,28 @@ function publicUser(user) {
     name: user.name,
     createdAt: user.createdAt,
   };
+}
+
+function statePayload() {
+  return {
+    version: 2,
+    savedAt: new Date().toISOString(),
+    users: [...users.entries()],
+    families: [...families.entries()].map(([pairCode, family]) => [pairCode, serializeFamily(family)]),
+  };
+}
+
+function applyStatePayload(parsed) {
+  families.clear();
+  users.clear();
+  const entries = Array.isArray(parsed && parsed.families) ? parsed.families : [];
+  for (const [pairCode, rawFamily] of entries) {
+    if (pairCode) families.set(pairCode, hydrateFamily(rawFamily));
+  }
+  const userEntries = Array.isArray(parsed && parsed.users) ? parsed.users : [];
+  for (const [token, user] of userEntries) {
+    if (token && user) users.set(token, user);
+  }
 }
 
 function iceConfig() {
@@ -288,33 +339,61 @@ function hydrateFamily(raw) {
   return family;
 }
 
-function loadState() {
+async function loadState() {
+  if (pgPool) {
+    try {
+      await pgPool.query(`
+        CREATE TABLE IF NOT EXISTS relay_state (
+          id TEXT PRIMARY KEY,
+          payload JSONB NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `);
+      const result = await pgPool.query("SELECT payload FROM relay_state WHERE id = $1", [STATE_ID]);
+      if (result.rows.length > 0) {
+        applyStatePayload(result.rows[0].payload);
+      } else if (fs.existsSync(STATE_FILE)) {
+        const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+        applyStatePayload(parsed);
+        await saveStateNow();
+        console.log(`Migrated local JSON relay state into PostgreSQL from ${STATE_FILE}`);
+      }
+      storageReady = true;
+      console.log(`Loaded ${families.size} families and ${users.size} users from PostgreSQL.`);
+      return;
+    } catch (error) {
+      console.error(`Failed to load relay state from PostgreSQL: ${error.message}`);
+      throw error;
+    }
+  }
   try {
     if (!fs.existsSync(STATE_FILE)) return;
     const parsed = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-    const entries = Array.isArray(parsed.families) ? parsed.families : [];
-    for (const [pairCode, rawFamily] of entries) {
-      if (pairCode) families.set(pairCode, hydrateFamily(rawFamily));
-    }
-    const userEntries = Array.isArray(parsed.users) ? parsed.users : [];
-    for (const [token, user] of userEntries) {
-      if (token && user) users.set(token, user);
-    }
+    applyStatePayload(parsed);
+    storageReady = true;
     console.log(`Loaded ${families.size} persisted families and ${users.size} users from ${STATE_FILE}`);
   } catch (error) {
     console.error(`Failed to load relay state: ${error.message}`);
   }
 }
 
-function saveStateNow() {
+async function saveStateNow() {
+  if (pgPool) {
+    try {
+      await pgPool.query(
+        `INSERT INTO relay_state (id, payload, updated_at)
+         VALUES ($1, $2::jsonb, now())
+         ON CONFLICT (id) DO UPDATE SET payload = EXCLUDED.payload, updated_at = now()`,
+        [STATE_ID, JSON.stringify(statePayload())]
+      );
+    } catch (error) {
+      console.error(`Failed to save relay state to PostgreSQL: ${error.message}`);
+    }
+    return;
+  }
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
-    const payload = {
-      version: 1,
-      savedAt: new Date().toISOString(),
-      users: [...users.entries()],
-      families: [...families.entries()].map(([pairCode, family]) => [pairCode, serializeFamily(family)]),
-    };
+    const payload = statePayload();
     const tempFile = `${STATE_FILE}.tmp`;
     fs.writeFileSync(tempFile, JSON.stringify(payload, null, 2), { mode: 0o600 });
     fs.renameSync(tempFile, STATE_FILE);
@@ -357,8 +436,6 @@ function resetSessionState(family) {
   scheduleSave();
 }
 
-loadState();
-
 const server = http.createServer(async (req, res) => {
   const startedAt = Date.now();
   res.on("finish", () => logRequest(req, res, startedAt));
@@ -375,33 +452,67 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/account/login") {
+    if (req.method === "POST" && url.pathname === "/api/account/register") {
       const payload = JSON.parse((await readBody(req)).toString("utf8"));
       const phone = String(payload.phone || "").replace(/[^\d+]/g, "").trim();
-      const code = String(payload.code || "").trim();
+      const password = String(payload.password || "");
       const name = String(payload.name || "").trim() || "亲友";
       if (phone.length < 6 || phone.length > 18) {
         sendJson(res, 400, { error: "valid phone is required" });
         return;
       }
-      if (!/^\d{4,6}$/.test(code)) {
-        sendJson(res, 400, { error: "valid verification code is required" });
+      if (password.length < 6 || password.length > 64) {
+        sendJson(res, 400, { error: "password must be 6-64 characters" });
         return;
       }
       const existing = [...users.entries()].find(([, user]) => user.phone === phone);
-      const accountToken = existing ? existing[0] : makeToken();
+      if (existing) {
+        sendJson(res, 409, { error: "phone is already registered" });
+        return;
+      }
+      const accountToken = makeToken();
       const nowIso = new Date().toISOString();
-      const user = existing ? existing[1] : {
+      const user = {
         id: makeId("user"),
         phone,
         name,
+        passwordHash: hashPassword(password),
         createdAt: nowIso,
+        lastLoginAt: nowIso,
       };
-      user.name = name;
+      users.set(accountToken, user);
+      scheduleSave();
+      sendJson(res, 200, { ok: true, accountToken, user: publicUser(user) });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/account/login") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const phone = String(payload.phone || "").replace(/[^\d+]/g, "").trim();
+      const password = String(payload.password || "");
+      if (phone.length < 6 || phone.length > 18) {
+        sendJson(res, 400, { error: "valid phone is required" });
+        return;
+      }
+      if (password.length < 6 || password.length > 64) {
+        sendJson(res, 400, { error: "valid password is required" });
+        return;
+      }
+      const existing = [...users.entries()].find(([, user]) => user.phone === phone);
+      if (!existing || !verifyPassword(password, existing[1].passwordHash)) {
+        sendJson(res, 403, { error: "invalid phone or password" });
+        return;
+      }
+      const accountToken = existing[0];
+      const user = existing[1];
+      const nowIso = new Date().toISOString();
+      if (String(payload.name || "").trim()) {
+        user.name = String(payload.name || "").trim();
+      }
       user.lastLoginAt = nowIso;
       users.set(accountToken, user);
       scheduleSave();
-      sendJson(res, 200, { ok: true, accountToken, user: publicUser(user), devVerification: true });
+      sendJson(res, 200, { ok: true, accountToken, user: publicUser(user) });
       return;
     }
 
@@ -1160,20 +1271,32 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, host, () => {
-  console.log(`Family Assist relay listening on http://${host}:${port}`);
-});
+async function start() {
+  await loadState();
+  server.listen(port, host, () => {
+    console.log(`Family Assist relay listening on http://${host}:${port}`);
+    console.log(pgPool ? "Relay storage: PostgreSQL" : "Relay storage: local JSON fallback");
+  });
+}
 
-function shutdown(signal) {
+async function shutdown(signal) {
   console.log(`Received ${signal}, saving relay state before exit.`);
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
-  saveStateNow();
+  await saveStateNow();
+  if (pgPool) {
+    await pgPool.end().catch(() => {});
+  }
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 2000).unref();
 }
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+start().catch((error) => {
+  console.error(`Failed to start relay: ${error.stack || error.message}`);
+  process.exit(1);
+});
