@@ -178,6 +178,7 @@ public class MainActivity extends Activity {
     private boolean resumeCaptureAfterNotificationSettings;
     private boolean inviteInProgress;
     private boolean bindInProgress;
+    private volatile boolean accountRequestInProgress;
     private boolean remoteRequestInProgress;
     private boolean familyEnding;
     private long lastAnnotationSentAtMs;
@@ -1796,6 +1797,9 @@ public class MainActivity extends Activity {
     }
 
     private void loginAccount(String phone, String password, String name, String afterRole, boolean register, Button sourceButton) {
+        if (accountRequestInProgress) {
+            return;
+        }
         if (phone.isEmpty()) {
             setStatus("请输入手机号。");
             return;
@@ -1816,6 +1820,7 @@ public class MainActivity extends Activity {
             name = "亲友";
         }
         final String finalName = name;
+        accountRequestInProgress = true;
         setButtonBusy(sourceButton, register ? "注册中..." : "登录中...");
         setStatus(register ? "正在注册..." : "正在登录...");
         statusIo.execute(() -> {
@@ -1847,6 +1852,8 @@ public class MainActivity extends Activity {
                     restoreButton(sourceButton);
                     setStatus(friendlyError(e));
                 });
+            } finally {
+                accountRequestInProgress = false;
             }
         });
     }
