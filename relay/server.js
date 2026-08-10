@@ -133,7 +133,15 @@ function newFamily() {
 }
 
 function makeToken() {
-  return crypto.randomBytes(24).toString("base64url");
+  return toBase64Url(crypto.randomBytes(24));
+}
+
+function toBase64Url(value) {
+  return Buffer.from(value)
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
 }
 
 function makeInviteCode() {
@@ -186,7 +194,7 @@ function makeResetCode() {
 }
 
 function hashResetCode(code, salt) {
-  return crypto.createHash("sha256").update(`${salt}:${code}`).digest("base64url");
+  return toBase64Url(crypto.createHash("sha256").update(`${salt}:${code}`).digest());
 }
 
 function sendResetCode(phone, code) {
@@ -234,8 +242,8 @@ function rotateAccountToken(oldToken, user) {
 }
 
 function hashPassword(password, salt) {
-  const actualSalt = salt || crypto.randomBytes(16).toString("base64url");
-  const hash = crypto.pbkdf2Sync(String(password), actualSalt, PASSWORD_ITERATIONS, PASSWORD_KEY_LEN, PASSWORD_DIGEST).toString("base64url");
+  const actualSalt = salt || toBase64Url(crypto.randomBytes(16));
+  const hash = toBase64Url(crypto.pbkdf2Sync(String(password), actualSalt, PASSWORD_ITERATIONS, PASSWORD_KEY_LEN, PASSWORD_DIGEST));
   return `pbkdf2_${PASSWORD_DIGEST}$${PASSWORD_ITERATIONS}$${actualSalt}$${hash}`;
 }
 
@@ -246,7 +254,7 @@ function verifyPassword(password, stored) {
   const salt = parts[2];
   const expected = parts[3];
   if (!Number.isFinite(iterations) || !salt || !expected) return false;
-  const actual = crypto.pbkdf2Sync(String(password), salt, iterations, PASSWORD_KEY_LEN, PASSWORD_DIGEST).toString("base64url");
+  const actual = toBase64Url(crypto.pbkdf2Sync(String(password), salt, iterations, PASSWORD_KEY_LEN, PASSWORD_DIGEST));
   return crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
 }
 
@@ -669,7 +677,7 @@ const server = http.createServer(async (req, res) => {
       const existing = findUserByPhone(phone);
       if (existing) {
         const code = makeResetCode();
-        const salt = crypto.randomBytes(12).toString("base64url");
+        const salt = toBase64Url(crypto.randomBytes(12));
         existing[1].passwordReset = {
           salt,
           codeHash: hashResetCode(code, salt),

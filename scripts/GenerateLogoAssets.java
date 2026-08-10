@@ -32,7 +32,7 @@ public class GenerateLogoAssets {
         g.setPaint(new LinearGradientPaint(
                 0, 0, size, size,
                 new float[]{0f, 0.52f, 1f},
-                new Color[]{c(0x7a2048), c(0x69265f), c(0x3f2b72)}));
+                new Color[]{c(0xff6f74), c(0xf04b83), c(0x8a5fd1)}));
         g.fill(new RoundRectangle2D.Double(0, 0, size, size, 232 * s, 232 * s));
 
         drawPhone(g, 256 * s, 275 * s, 228 * s, 448 * s, c(0x356ae6), s);
