@@ -109,6 +109,27 @@ async function run() {
   assert(secureConfirm.status === 200 && secureConfirm.body.approved, "elder should approve the family binding");
   const pendingDone = await get(`/api/bind/pending?pairCode=${securePairCode}&pendingToken=${secureBind.body.pendingToken}&accountToken=${familyAccount.body.accountToken}`);
   assert(pendingDone.status === 200 && pendingDone.body.approved && pendingDone.body.authToken, "family should receive auth token after approval");
+  const relativesStatus = await get(`/api/bind/status?pairCode=${securePairCode}&authToken=${secureInvite.body.authToken}`);
+  assert(relativesStatus.body.family.familyMembers.length === 1
+    && relativesStatus.body.family.familyMembers[0].name === "女儿"
+    && relativesStatus.body.family.familyMembers[0].ref,
+  "elder should receive a safe list of bound relatives");
+  const targetedHelp = await post("/api/help", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    elderName: "妈妈",
+    targetHelperRef: relativesStatus.body.family.familyMembers[0].ref,
+  });
+  assert(targetedHelp.status === 200 && targetedHelp.body.family.targetHelperName === "女儿",
+    "elder should be able to request a selected relative");
+  const targetedJoin = await get(`/api/help?pairCode=${securePairCode}&authToken=${pendingDone.body.authToken}`);
+  assert(targetedJoin.body.helperIsCurrent && targetedJoin.body.targetedForCurrent,
+    "the selected relative should join the targeted session");
+  await post("/api/end", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    sessionId: targetedHelp.body.sessionId,
+  });
   const elderRelogin = await post("/api/account/login", { phone: "13800000001", password: "elderPass123" });
   const familyRelogin = await post("/api/account/login", { phone: "13800000002", password: "familyPass123" });
   assert(elderRelogin.body.memberships.some((item) => item.role === "elder" && item.pairCode === securePairCode),
@@ -131,6 +152,22 @@ async function run() {
   await post("/api/bind", { pairCode, inviteCode, familyName: "家属5", deviceId: "family-5" });
   const overLimit = await post("/api/bind", { pairCode, inviteCode, familyName: "家属6", deviceId: "family-6" });
   assert(overLimit.status === 409, "family binding should enforce the member limit");
+
+  const legacyRelatives = await get(`/api/bind/status?pairCode=${pairCode}&authToken=${elderToken}`);
+  const selectedRelative = legacyRelatives.body.family.familyMembers.find((item) => item.name === "儿子");
+  const selectedHelp = await post("/api/help", {
+    pairCode,
+    authToken: elderToken,
+    elderName: "妈妈",
+    targetHelperRef: selectedRelative.ref,
+  });
+  const unselectedJoin = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
+  const selectedJoin = await get(`/api/help?pairCode=${pairCode}&authToken=${second.body.authToken}`);
+  assert(!unselectedJoin.body.targetedForCurrent && !unselectedJoin.body.helperIsCurrent,
+    "an unselected relative must not claim a targeted session");
+  assert(selectedJoin.body.targetedForCurrent && selectedJoin.body.helperIsCurrent,
+    "the selected relative should claim a targeted session");
+  await post("/api/end", { pairCode, authToken: elderToken, sessionId: selectedHelp.body.sessionId });
 
   const help = await post("/api/help", { pairCode, authToken: elderToken, elderName: "妈妈" });
   assert(help.status === 200, "elder should start assistance");

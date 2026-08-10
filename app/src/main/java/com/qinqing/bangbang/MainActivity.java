@@ -173,6 +173,8 @@ public class MainActivity extends Activity {
     private String familyLastSessionId = "";
     private String currentPage = "home";
     private String authReturnPage = "home";
+    private String pendingTargetHelperRef = "";
+    private String pendingTargetHelperName = "";
     private boolean captureRequestInProgress;
     private boolean resumeCaptureAfterNotificationPermission;
     private boolean resumeCaptureAfterNotificationSettings;
@@ -327,6 +329,8 @@ public class MainActivity extends Activity {
             navigateAfterAuthCancel();
         } else if ("settings".equals(currentPage) || "privacy".equals(currentPage) || "relatives".equals(currentPage)) {
             showProfile();
+        } else if ("elderFamily".equals(currentPage)) {
+            showElder();
         } else if ("familyBindPending".equals(currentPage)) {
             showFamilyBind();
         } else if ("safety".equals(currentPage)) {
@@ -353,6 +357,8 @@ public class MainActivity extends Activity {
                 setStatus("求助已发出，家人正在连接。需要结束时点“结束本次求助”。");
             });
         } else if (requestCode == REQUEST_CAPTURE) {
+            pendingTargetHelperRef = "";
+            pendingTargetHelperName = "";
             prefs.edit().putBoolean("assistActive", false).apply();
             endHelpRequest();
             showElder();
@@ -1145,6 +1151,10 @@ public class MainActivity extends Activity {
         if (!ensureLoggedIn("family")) {
             return;
         }
+        if (isBoundAs("elder")) {
+            showElderFamilyMembers();
+            return;
+        }
         restoreMembershipForRole("family");
         currentPage = "family";
         prefs.edit().putBoolean("elderPageVisible", false).apply();
@@ -1202,6 +1212,89 @@ public class MainActivity extends Activity {
         setFamilySessionActive(false);
         setContentView(familyPage(root, familyActionBar, bottomNav("family")));
         startFamilyPollLoop();
+    }
+
+    private void showElderFamilyMembers() {
+        currentPage = "elderFamily";
+        prefs.edit().putBoolean("elderPageVisible", true).apply();
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        elderBindPolling = false;
+        root = verticalRoot();
+        root.addView(compactPageTitle("我的家人"));
+        status = notice("");
+        status.setVisibility(View.GONE);
+
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setLayoutParams(fullWidthParams());
+        list.addView(card("正在加载", "正在获取已绑定的家人..."));
+        root.addView(list);
+        root.addView(status);
+
+        Button inviteButton = secondaryButton("添加家属");
+        inviteButton.setOnClickListener(v -> createInvite(inviteButton));
+        root.addView(inviteButton);
+        root.addView(bottomNav("family"));
+        setContentView(scroll(root));
+        loadElderFamilyMembers(list);
+    }
+
+    private void loadElderFamilyMembers(LinearLayout list) {
+        statusIo.execute(() -> {
+            try {
+                JSONObject result = NetworkClient.getJson(baseUrl,
+                        "/api/bind/status?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
+                JSONObject family = result.optJSONObject("family");
+                JSONArray members = family == null ? null : family.optJSONArray("familyMembers");
+                main.post(() -> renderElderFamilyMembers(list, members));
+            } catch (Exception e) {
+                main.post(() -> {
+                    list.removeAllViews();
+                    list.addView(card("暂时无法加载", "请检查网络后再试。"));
+                    Button retryButton = secondaryButton("重新加载");
+                    retryButton.setOnClickListener(v -> {
+                        setButtonBusy(retryButton, "加载中...");
+                        loadElderFamilyMembers(list);
+                    });
+                    list.addView(retryButton);
+                });
+            }
+        });
+    }
+
+    private void renderElderFamilyMembers(LinearLayout list, JSONArray members) {
+        if (!"elderFamily".equals(currentPage)) {
+            return;
+        }
+        list.removeAllViews();
+        if (members == null || members.length() == 0) {
+            list.addView(card("还没有绑定家属", "添加家属后，就能在这里快速向指定家人求助。"));
+            return;
+        }
+        list.addView(card("选择一位家人", "需要帮助时，直接请熟悉的家人接入。"));
+        for (int index = 0; index < members.length(); index++) {
+            JSONObject member = members.optJSONObject(index);
+            if (member == null) continue;
+            String ref = member.optString("ref", "");
+            String name = member.optString("name", "家属");
+            String phone = member.optString("phone", "");
+            LinearLayout memberCard = card(name, phone.isEmpty() ? "已绑定" : phone + " · 已绑定");
+            Button helpButton = primaryButton("请" + name + "帮忙");
+            helpButton.setOnClickListener(v -> requestSelectedFamilyHelp(ref, name, helpButton));
+            memberCard.addView(helpButton);
+            list.addView(memberCard);
+        }
+    }
+
+    private void requestSelectedFamilyHelp(String memberRef, String memberName, Button sourceButton) {
+        if (memberRef.isEmpty() || captureRequestInProgress) {
+            return;
+        }
+        pendingTargetHelperRef = memberRef;
+        pendingTargetHelperName = memberName;
+        setButtonBusy(sourceButton, "正在联系" + memberName + "...");
+        handleElderPrimaryAction();
     }
 
     private View buildFrameView() {
@@ -1777,6 +1870,8 @@ public class MainActivity extends Activity {
     }
 
     private void publishHelpRequest(Runnable afterSuccess) {
+        final String targetHelperRef = pendingTargetHelperRef;
+        final String targetHelperName = pendingTargetHelperName;
         statusIo.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
@@ -1785,14 +1880,26 @@ public class MainActivity extends Activity {
                         .put("elderName", displayName)
                         .put("deviceName", Build.MANUFACTURER + " " + Build.MODEL)
                         .put("masked", isPrivacyMasked());
+                if (!targetHelperRef.isEmpty()) {
+                    payload.put("targetHelperRef", targetHelperRef);
+                }
                 JSONObject result = NetworkClient.postJson(baseUrl, "/api/help", payload);
                 String sessionId = result.optString("sessionId", "");
                 prefs.edit().putString(PREF_ASSIST_SESSION_ID, sessionId).apply();
                 if (afterSuccess != null) {
-                    main.post(afterSuccess);
+                    main.post(() -> {
+                        pendingTargetHelperRef = "";
+                        pendingTargetHelperName = "";
+                        afterSuccess.run();
+                        if (!targetHelperName.isEmpty()) {
+                            setStatus("已通知" + targetHelperName + "，正在等待接入。需要结束时点“结束本次求助”。");
+                        }
+                    });
                 }
             } catch (Exception e) {
                 main.post(() -> {
+                    pendingTargetHelperRef = "";
+                    pendingTargetHelperName = "";
                     markAssistanceStoppedLocal();
                     stopCaptureServices();
                     showElder();
@@ -2442,6 +2549,24 @@ public class MainActivity extends Activity {
                 }
                 boolean helperIsCurrent = !help.has("helperIsCurrent") || help.optBoolean("helperIsCurrent", false);
                 String helperName = help.optString("helperName", "家人");
+                boolean targetedForCurrent = help.optBoolean("targetedForCurrent", true);
+                String targetHelperName = help.optString("targetHelperName", "");
+                if (!targetedForCurrent) {
+                    familyControlAllowed = false;
+                    main.post(() -> {
+                        familyLastSessionId = "";
+                        stopFamilyWebRtc();
+                        clearFamilyScreen();
+                        setFamilySessionActive(false);
+                        if (familyWaitingTitle != null) familyWaitingTitle.setText("暂时无需你协助");
+                        if (familyWaitingCaption != null) {
+                            familyWaitingCaption.setText(targetHelperName.isEmpty()
+                                    ? "长辈这次邀请了其他家属。"
+                                    : "长辈这次邀请了" + targetHelperName + "。");
+                        }
+                    });
+                    return;
+                }
                 if (!helperIsCurrent) {
                     familyControlAllowed = false;
                     main.post(() -> {
@@ -2998,6 +3123,8 @@ public class MainActivity extends Activity {
     }
 
     private void markAssistanceStoppedLocal() {
+        pendingTargetHelperRef = "";
+        pendingTargetHelperName = "";
         prefs.edit()
                 .putBoolean("remoteControlAllowed", false)
                 .putBoolean("assistActive", false)

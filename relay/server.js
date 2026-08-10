@@ -119,6 +119,8 @@ function newFamily() {
     lastControlActionAtMs: 0,
     activeHelperToken: "",
     activeHelperName: "",
+    targetHelperRef: "",
+    targetHelperName: "",
     pendingBindRequests: [],
     audit: [],
     crashes: [],
@@ -334,6 +336,17 @@ function familyMembers(family) {
   return [...family.members.entries()].filter(([, member]) => member.role === "family");
 }
 
+function memberReference(authToken, member) {
+  if (member && member.userId) return String(member.userId);
+  return "member_" + crypto.createHash("sha256").update(String(authToken || "")).digest("hex").slice(0, 16);
+}
+
+function maskMemberPhone(phone) {
+  const value = String(phone || "");
+  if (value.length < 7) return "";
+  return value.slice(0, 3) + "****" + value.slice(-4);
+}
+
 function publicFamily(family, member, authToken) {
   const relatives = familyMembers(family);
   const pendingBindRequests = Array.isArray(family.pendingBindRequests) ? family.pendingBindRequests : [];
@@ -360,6 +373,18 @@ function publicFamily(family, member, authToken) {
     helperJoined: Boolean(family.activeHelperToken),
     helperIsCurrent: Boolean(authToken) && family.activeHelperToken === authToken,
     helperName: family.activeHelperName,
+    targetHelperName: family.targetHelperName,
+    targetedForCurrent: !family.targetHelperRef
+      || (member && member.role === "elder")
+      || (member && member.role === "family" && memberReference(authToken, member) === family.targetHelperRef),
+    familyMembers: member && member.role === "elder"
+      ? relatives.map(([token, relative]) => ({
+        ref: memberReference(token, relative),
+        name: relative.name || "家属",
+        phone: maskMemberPhone(relative.phone),
+        createdAt: relative.createdAt || "",
+      }))
+      : [],
     pendingBindCount: pendingBindRequests.length,
     pendingBindRequests: member && member.role === "elder"
       ? pendingBindRequests.map((item) => ({
@@ -436,6 +461,8 @@ function serializeFamily(family) {
     sessionId: "",
     activeHelperToken: "",
     activeHelperName: "",
+    targetHelperRef: "",
+    targetHelperName: "",
     pendingBindRequests: (family.pendingBindRequests || []).filter((item) => Date.now() <= Number(item.expiresAt || 0)),
     members: [...family.members.entries()],
     webrtc: {
@@ -461,6 +488,8 @@ function hydrateFamily(raw) {
   family.sessionId = "";
   family.activeHelperToken = "";
   family.activeHelperName = "";
+  family.targetHelperRef = "";
+  family.targetHelperName = "";
   family.webrtc = {
     offer: null,
     answer: null,
@@ -557,6 +586,8 @@ function resetSessionState(family) {
   family.lastFamilySeenAt = "";
   family.activeHelperToken = "";
   family.activeHelperName = "";
+  family.targetHelperRef = "";
+  family.targetHelperName = "";
   family.updatedAt = new Date().toISOString();
   family.webrtc = {
     offer: null,
@@ -1080,6 +1111,14 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 409, { error: "no family member is bound" });
         return;
       }
+      const targetHelperRef = String(payload.targetHelperRef || "").trim();
+      const targetHelper = targetHelperRef
+        ? familyMembers(family).find(([token, member]) => memberReference(token, member) === targetHelperRef)
+        : null;
+      if (targetHelperRef && !targetHelper) {
+        sendJson(res, 404, { error: "family member not found" });
+        return;
+      }
       family.sessionId = makeSessionId();
       family.active = true;
       family.elderName = String(payload.elderName || family.elderName || "长辈");
@@ -1098,6 +1137,8 @@ const server = http.createServer(async (req, res) => {
       family.controlAction = null;
       family.activeHelperToken = "";
       family.activeHelperName = "";
+      family.targetHelperRef = targetHelperRef;
+      family.targetHelperName = targetHelper ? (targetHelper[1].name || "家属") : "";
       family.webrtc = {
         offer: null,
         answer: null,
@@ -1105,7 +1146,11 @@ const server = http.createServer(async (req, res) => {
         familyIce: [],
         updatedAt: family.updatedAt,
       };
-      audit(family, "help_started", { sessionId: family.sessionId, elderName: family.elderName });
+      audit(family, "help_started", {
+        sessionId: family.sessionId,
+        elderName: family.elderName,
+        targetHelperName: family.targetHelperName,
+      });
       sendJson(res, 200, { ok: true, sessionId: family.sessionId, family: publicFamily(family, result.member, authToken) });
       return;
     }
@@ -1115,7 +1160,9 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(url.searchParams.get("authToken") || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
-      if (result.family.active && !result.family.activeHelperToken) {
+      const currentHelperRef = memberReference(authToken, result.member);
+      const targetedForCurrent = !result.family.targetHelperRef || result.family.targetHelperRef === currentHelperRef;
+      if (result.family.active && targetedForCurrent && !result.family.activeHelperToken) {
         result.family.activeHelperToken = authToken;
         result.family.activeHelperName = result.member.name || "家属";
         audit(result.family, "family_joined", { name: result.family.activeHelperName, sessionId: result.family.sessionId });
