@@ -114,12 +114,35 @@ async function run() {
     && relativesStatus.body.family.familyMembers[0].name === "女儿"
     && relativesStatus.body.family.familyMembers[0].ref,
   "elder should receive a safe list of bound relatives");
-  const targetedHelp = await post("/api/help", {
+  const secureHelpInvite = await post("/api/help/invite", {
     pairCode: securePairCode,
     authToken: secureInvite.body.authToken,
     elderName: "妈妈",
     targetHelperRef: relativesStatus.body.family.familyMembers[0].ref,
   });
+  const unacceptedStart = await post("/api/help", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    elderName: "妈妈",
+    targetHelperRef: relativesStatus.body.family.familyMembers[0].ref,
+    helpInvitationId: secureHelpInvite.body.invitation.id,
+  });
+  assert(unacceptedStart.status === 409, "screen sharing must not start before the relative accepts");
+  const secureInviteAccept = await post("/api/help/invite/respond", {
+    pairCode: securePairCode,
+    authToken: pendingDone.body.authToken,
+    invitationId: secureHelpInvite.body.invitation.id,
+    accepted: true,
+  });
+  const targetedHelp = await post("/api/help", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    elderName: "妈妈",
+    targetHelperRef: relativesStatus.body.family.familyMembers[0].ref,
+    helpInvitationId: secureHelpInvite.body.invitation.id,
+  });
+  assert(secureInviteAccept.status === 200 && secureInviteAccept.body.invitation.status === "accepted",
+    "selected relative must explicitly accept the invitation");
   assert(targetedHelp.status === 200 && targetedHelp.body.family.targetHelperName === "女儿",
     "elder should be able to request a selected relative");
   const targetedJoin = await get(`/api/help?pairCode=${securePairCode}&authToken=${pendingDone.body.authToken}`);
@@ -155,12 +178,33 @@ async function run() {
 
   const legacyRelatives = await get(`/api/bind/status?pairCode=${pairCode}&authToken=${elderToken}`);
   const selectedRelative = legacyRelatives.body.family.familyMembers.find((item) => item.name === "儿子");
-  const selectedHelp = await post("/api/help", {
+  const selectedInvite = await post("/api/help/invite", {
     pairCode,
     authToken: elderToken,
     elderName: "妈妈",
     targetHelperRef: selectedRelative.ref,
   });
+  const unselectedAccept = await post("/api/help/invite/respond", {
+    pairCode,
+    authToken: first.body.authToken,
+    invitationId: selectedInvite.body.invitation.id,
+    accepted: true,
+  });
+  assert(unselectedAccept.status === 404, "an unselected relative must not accept the invitation");
+  const selectedAccept = await post("/api/help/invite/respond", {
+    pairCode,
+    authToken: second.body.authToken,
+    invitationId: selectedInvite.body.invitation.id,
+    accepted: true,
+  });
+  const selectedHelp = await post("/api/help", {
+    pairCode,
+    authToken: elderToken,
+    elderName: "妈妈",
+    targetHelperRef: selectedRelative.ref,
+    helpInvitationId: selectedInvite.body.invitation.id,
+  });
+  assert(selectedAccept.status === 200, "the selected relative should accept the invitation");
   const unselectedJoin = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
   const selectedJoin = await get(`/api/help?pairCode=${pairCode}&authToken=${second.body.authToken}`);
   assert(!unselectedJoin.body.targetedForCurrent && !unselectedJoin.body.helperIsCurrent,

@@ -15,6 +15,7 @@ const host = process.env.HOST || "0.0.0.0";
 const families = new Map();
 const users = new Map();
 const MAX_FAMILY_MEMBERS = 5;
+const HELP_INVITE_TTL_MS = 2 * 60 * 1000;
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES || 8 * 1024 * 1024);
 const DATA_DIR = process.env.RELAY_DATA_DIR || path.join(__dirname, "..", ".data");
 const STATE_FILE = process.env.RELAY_STATE_FILE || path.join(DATA_DIR, "relay-state.json");
@@ -121,6 +122,7 @@ function newFamily() {
     activeHelperName: "",
     targetHelperRef: "",
     targetHelperName: "",
+    pendingHelpInvitation: null,
     pendingBindRequests: [],
     audit: [],
     crashes: [],
@@ -385,6 +387,7 @@ function publicFamily(family, member, authToken) {
         createdAt: relative.createdAt || "",
       }))
       : [],
+    helpInvitation: publicHelpInvitation(family, member, authToken),
     pendingBindCount: pendingBindRequests.length,
     pendingBindRequests: member && member.role === "elder"
       ? pendingBindRequests.map((item) => ({
@@ -395,6 +398,28 @@ function publicFamily(family, member, authToken) {
         expiresAt: item.expiresAt,
       }))
       : [],
+  };
+}
+
+function publicHelpInvitation(family, member, authToken) {
+  const invitation = family.pendingHelpInvitation;
+  if (!invitation) return null;
+  if ((invitation.status === "pending" || invitation.status === "accepted")
+      && Date.now() > Number(invitation.expiresAt || 0)) {
+    invitation.status = "expired";
+    invitation.updatedAt = new Date().toISOString();
+    scheduleSave();
+  }
+  const currentRef = member && member.role === "family" ? memberReference(authToken, member) : "";
+  if (!member || (member.role === "family" && invitation.targetHelperRef !== currentRef)) return null;
+  return {
+    id: invitation.id,
+    status: invitation.status,
+    elderName: invitation.elderName,
+    targetHelperName: invitation.targetHelperName,
+    createdAt: invitation.createdAt,
+    updatedAt: invitation.updatedAt,
+    expiresAt: invitation.expiresAt,
   };
 }
 
@@ -463,6 +488,11 @@ function serializeFamily(family) {
     activeHelperName: "",
     targetHelperRef: "",
     targetHelperName: "",
+    pendingHelpInvitation: family.pendingHelpInvitation
+      && (family.pendingHelpInvitation.status === "pending" || family.pendingHelpInvitation.status === "accepted")
+      && Date.now() <= Number(family.pendingHelpInvitation.expiresAt || 0)
+      ? family.pendingHelpInvitation
+      : null,
     pendingBindRequests: (family.pendingBindRequests || []).filter((item) => Date.now() <= Number(item.expiresAt || 0)),
     members: [...family.members.entries()],
     webrtc: {
@@ -490,6 +520,11 @@ function hydrateFamily(raw) {
   family.activeHelperName = "";
   family.targetHelperRef = "";
   family.targetHelperName = "";
+  if (family.pendingHelpInvitation
+      && ((family.pendingHelpInvitation.status !== "pending" && family.pendingHelpInvitation.status !== "accepted")
+        || Date.now() > Number(family.pendingHelpInvitation.expiresAt || 0))) {
+    family.pendingHelpInvitation = null;
+  }
   family.webrtc = {
     offer: null,
     answer: null,
@@ -588,6 +623,7 @@ function resetSessionState(family) {
   family.activeHelperName = "";
   family.targetHelperRef = "";
   family.targetHelperName = "";
+  family.pendingHelpInvitation = null;
   family.updatedAt = new Date().toISOString();
   family.webrtc = {
     offer: null,
@@ -1100,6 +1136,94 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/help/invite") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const targetHelperRef = String(payload.targetHelperRef || "").trim();
+      const result = requireMember(res, pairCode, authToken, "elder");
+      if (!result) return;
+      if (result.family.active) {
+        sendJson(res, 409, { error: "assist session is active" });
+        return;
+      }
+      const target = familyMembers(result.family)
+        .find(([token, member]) => memberReference(token, member) === targetHelperRef);
+      if (!target) {
+        sendJson(res, 404, { error: "family member not found" });
+        return;
+      }
+      const now = new Date().toISOString();
+      result.family.pendingHelpInvitation = {
+        id: makeId("help"),
+        status: "pending",
+        elderName: String(payload.elderName || result.family.elderName || "长辈"),
+        targetHelperRef,
+        targetHelperName: target[1].name || "家属",
+        createdAt: now,
+        updatedAt: now,
+        expiresAt: Date.now() + HELP_INVITE_TTL_MS,
+      };
+      result.family.updatedAt = now;
+      audit(result.family, "help_invited", {
+        invitationId: result.family.pendingHelpInvitation.id,
+        targetHelperName: result.family.pendingHelpInvitation.targetHelperName,
+      });
+      sendJson(res, 200, {
+        ok: true,
+        invitation: publicHelpInvitation(result.family, result.member, authToken),
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/help/invite") {
+      const pairCode = String(url.searchParams.get("pairCode") || "").trim();
+      const authToken = String(url.searchParams.get("authToken") || "").trim();
+      const result = requireMember(res, pairCode, authToken);
+      if (!result) return;
+      sendJson(res, 200, {
+        ok: true,
+        invitation: publicHelpInvitation(result.family, result.member, authToken),
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/help/invite/respond") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const invitationId = String(payload.invitationId || "").trim();
+      const accepted = Boolean(payload.accepted);
+      const result = requireMember(res, pairCode, authToken, "family");
+      if (!result) return;
+      const invitation = result.family.pendingHelpInvitation;
+      const currentRef = memberReference(authToken, result.member);
+      if (!invitation || invitation.id !== invitationId || invitation.targetHelperRef !== currentRef) {
+        sendJson(res, 404, { error: "help invitation not found" });
+        return;
+      }
+      if (invitation.status !== "pending" || Date.now() > Number(invitation.expiresAt || 0)) {
+        invitation.status = "expired";
+        invitation.updatedAt = new Date().toISOString();
+        scheduleSave();
+        sendJson(res, 409, { error: "help invitation expired" });
+        return;
+      }
+      invitation.status = accepted ? "accepted" : "declined";
+      invitation.updatedAt = new Date().toISOString();
+      if (accepted) invitation.expiresAt = Date.now() + HELP_INVITE_TTL_MS;
+      result.family.updatedAt = invitation.updatedAt;
+      audit(result.family, accepted ? "help_invite_accepted" : "help_invite_declined", {
+        invitationId,
+        name: result.member.name || "家属",
+      });
+      sendJson(res, 200, {
+        ok: true,
+        invitation: publicHelpInvitation(result.family, result.member, authToken),
+      });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/help") {
       const payload = JSON.parse((await readBody(req)).toString("utf8"));
       const pairCode = String(payload.pairCode || "").trim();
@@ -1112,12 +1236,22 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const targetHelperRef = String(payload.targetHelperRef || "").trim();
+      const invitationId = String(payload.helpInvitationId || "").trim();
       const targetHelper = targetHelperRef
         ? familyMembers(family).find(([token, member]) => memberReference(token, member) === targetHelperRef)
         : null;
       if (targetHelperRef && !targetHelper) {
         sendJson(res, 404, { error: "family member not found" });
         return;
+      }
+      if (targetHelperRef) {
+        const invitation = family.pendingHelpInvitation;
+        if (!invitation || invitation.id !== invitationId
+            || invitation.targetHelperRef !== targetHelperRef
+            || invitation.status !== "accepted") {
+          sendJson(res, 409, { error: "help invitation was not accepted" });
+          return;
+        }
       }
       family.sessionId = makeSessionId();
       family.active = true;
@@ -1135,10 +1269,11 @@ const server = http.createServer(async (req, res) => {
       family.controlReason = "";
       family.controlUpdatedAt = family.updatedAt;
       family.controlAction = null;
-      family.activeHelperToken = "";
-      family.activeHelperName = "";
+      family.activeHelperToken = targetHelper ? targetHelper[0] : "";
+      family.activeHelperName = targetHelper ? (targetHelper[1].name || "家属") : "";
       family.targetHelperRef = targetHelperRef;
       family.targetHelperName = targetHelper ? (targetHelper[1].name || "家属") : "";
+      family.pendingHelpInvitation = null;
       family.webrtc = {
         offer: null,
         answer: null,

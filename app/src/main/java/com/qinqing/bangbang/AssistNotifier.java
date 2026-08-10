@@ -20,6 +20,7 @@ final class AssistNotifier {
     static final String CHANNEL_URGENT = "assist_urgent_v2";
     private static final int NOTIFICATION_CONTROL_REQUEST = 3001;
     private static final int NOTIFICATION_ASSIST_ENDED = 3002;
+    private static final int NOTIFICATION_HELP_INVITE = 3003;
 
     private AssistNotifier() {
     }
@@ -33,7 +34,7 @@ final class AssistNotifier {
                 "重要协助提醒",
                 NotificationManager.IMPORTANCE_HIGH
         );
-        channel.setDescription("远程操作授权和协助结束提醒");
+        channel.setDescription("家人求助、远程操作授权和协助结束提醒");
         channel.enableVibration(true);
         channel.setVibrationPattern(new long[]{0, 350, 180, 350});
         channel.enableLights(true);
@@ -153,6 +154,60 @@ final class AssistNotifier {
         if (manager != null) {
             manager.notify(NOTIFICATION_ASSIST_ENDED, notification);
         }
+    }
+
+    static synchronized void handleHelpInvite(Context context, JSONObject invitation) {
+        if (invitation == null || !"pending".equals(invitation.optString("status", "pending"))) return;
+        String id = invitation.optString("id", "");
+        if (id.isEmpty()) return;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        prefs.edit().putString("pendingFamilyHelpInvitation", invitation.toString()).commit();
+        if (isAppUiForeground(context)) return;
+        if (id.equals(prefs.getString("notifiedFamilyHelpInvitationId", ""))) return;
+        prefs.edit().putString("notifiedFamilyHelpInvitationId", id).commit();
+        showHelpInviteNotification(context, invitation.optString("elderName", "长辈"));
+        showUrgentOverlay(context,
+                invitation.optString("elderName", "长辈") + "需要你帮忙",
+                "请打开亲情帮帮，接受或拒绝本次协助请求。",
+                "help-invite:" + id);
+    }
+
+    static void showHelpInviteNotification(Context context, String elderName) {
+        if (Build.VERSION.SDK_INT >= 33
+                && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
+        Intent intent = new Intent(context, MainActivity.class)
+                .putExtra("openFamilyHelpInvite", true)
+                .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+                context, 2, intent,
+                Build.VERSION.SDK_INT >= 23
+                        ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                        : PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(context, CHANNEL_URGENT)
+                : new Notification.Builder(context);
+        Notification notification = builder
+                .setContentTitle(elderName + "需要你帮忙")
+                .setContentText("点这里确认是否接受本次协助请求。")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentIntent(pendingIntent)
+                .setCategory(Notification.CATEGORY_CALL)
+                .setColor(0xFFD83F5F)
+                .setStyle(new Notification.BigTextStyle()
+                        .bigText("接受后长辈才会开始共享屏幕。请点这里确认是否方便协助。"))
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setDefaults(Notification.DEFAULT_ALL)
+                .setOnlyAlertOnce(true)
+                .setAutoCancel(true)
+                .build();
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) manager.notify(NOTIFICATION_HELP_INVITE, notification);
+    }
+
+    static void cancelHelpInviteNotification(Context context) {
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) manager.cancel(NOTIFICATION_HELP_INVITE);
     }
 
     static synchronized void handleAssistEnded(Context context, JSONObject family) {
