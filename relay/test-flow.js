@@ -172,6 +172,43 @@ async function run() {
     authToken: secureInvite.body.authToken,
     sessionId: targetedHelp.body.sessionId,
   });
+  const familyAssistRequest = await post("/api/help/family-request", {
+    pairCode: securePairCode,
+    authToken: pendingDone.body.authToken,
+  });
+  assert(familyAssistRequest.status === 200 && familyAssistRequest.body.request.status === "pending",
+    "a bound relative should be able to request an assistance session");
+  const elderSeesFamilyRequest = await get(`/api/help/family-request?pairCode=${securePairCode}&authToken=${secureInvite.body.authToken}`);
+  assert(elderSeesFamilyRequest.body.request.helperName === "女儿",
+    "the elder should see which relative requested assistance");
+  const familyRequestAccepted = await post("/api/help/family-request/respond", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    requestId: familyAssistRequest.body.request.id,
+    accepted: true,
+  });
+  assert(familyRequestAccepted.status === 200
+    && familyRequestAccepted.body.helpInvitation.status === "accepted"
+    && familyRequestAccepted.body.helpInvitation.targetHelperRef,
+  "elder approval should create an accepted targeted help invitation");
+  const familyInitiatedHelp = await post("/api/help", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    elderName: "妈妈",
+    targetHelperRef: familyRequestAccepted.body.helpInvitation.targetHelperRef,
+    helpInvitationId: familyRequestAccepted.body.helpInvitation.id,
+  });
+  assert(familyInitiatedHelp.status === 200 && familyInitiatedHelp.body.family.targetHelperName === "女儿",
+    "screen sharing should start only after the elder accepts the relative's request");
+  const activeElderStatus = await get(`/api/bind/status?pairCode=${securePairCode}&authToken=${secureInvite.body.authToken}`);
+  assert(activeElderStatus.body.family.active
+    && activeElderStatus.body.family.activeHelperRef === relativesStatus.body.family.familyMembers[0].ref,
+  "elder relative list state should identify the active helper");
+  await post("/api/end", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    sessionId: familyInitiatedHelp.body.sessionId,
+  });
   const elderRelogin = await post("/api/account/login", { phone: "13800000001", password: "elderPass123" });
   const familyRelogin = await post("/api/account/login", { phone: "13800000002", password: "familyPass123" });
   assert(elderRelogin.body.user.appRole === "elder" && familyRelogin.body.user.appRole === "family",

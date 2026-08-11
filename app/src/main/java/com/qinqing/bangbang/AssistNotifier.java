@@ -21,6 +21,7 @@ final class AssistNotifier {
     private static final int NOTIFICATION_CONTROL_REQUEST = 3001;
     private static final int NOTIFICATION_ASSIST_ENDED = 3002;
     private static final int NOTIFICATION_HELP_INVITE = 3003;
+    private static final int NOTIFICATION_FAMILY_ASSIST_REQUEST = 3004;
 
     private AssistNotifier() {
     }
@@ -208,6 +209,60 @@ final class AssistNotifier {
     static void cancelHelpInviteNotification(Context context) {
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) manager.cancel(NOTIFICATION_HELP_INVITE);
+    }
+
+    static synchronized void handleFamilyAssistRequest(Context context, JSONObject request) {
+        if (request == null || !"pending".equals(request.optString("status", "pending"))) return;
+        String id = request.optString("id", "");
+        if (id.isEmpty()) return;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        prefs.edit().putString("pendingFamilyAssistRequest", request.toString()).commit();
+        if (isAppUiForeground(context)) return;
+        if (id.equals(prefs.getString("notifiedFamilyAssistRequestId", ""))) return;
+        prefs.edit().putString("notifiedFamilyAssistRequestId", id).commit();
+        String helperName = request.optString("helperName", "家属");
+        showFamilyAssistRequestNotification(context, helperName);
+        showUrgentOverlay(context,
+                helperName + "想帮你操作手机",
+                "请打开亲情帮帮，确认是否接受本次协助。",
+                "family-assist-request:" + id);
+    }
+
+    private static void showFamilyAssistRequestNotification(Context context, String helperName) {
+        if (Build.VERSION.SDK_INT >= 33
+                && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
+        Intent intent = new Intent(context, MainActivity.class)
+                .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+                context, 4, intent,
+                Build.VERSION.SDK_INT >= 23
+                        ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                        : PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(context, CHANNEL_URGENT)
+                : new Notification.Builder(context);
+        Notification notification = builder
+                .setContentTitle(helperName + "想帮助你")
+                .setContentText("点这里确认是否接受本次手机协助。")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentIntent(pendingIntent)
+                .setCategory(Notification.CATEGORY_CALL)
+                .setColor(0xFFD83F5F)
+                .setStyle(new Notification.BigTextStyle()
+                        .bigText("只有你明确同意并确认屏幕共享后，家属才能开始协助。"))
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setDefaults(Notification.DEFAULT_ALL)
+                .setOnlyAlertOnce(true)
+                .setAutoCancel(true)
+                .build();
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) manager.notify(NOTIFICATION_FAMILY_ASSIST_REQUEST, notification);
+    }
+
+    static void cancelFamilyAssistRequestNotification(Context context) {
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) manager.cancel(NOTIFICATION_FAMILY_ASSIST_REQUEST);
     }
 
     static synchronized void handleAssistEnded(Context context, JSONObject family) {

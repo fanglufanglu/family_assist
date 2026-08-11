@@ -11,8 +11,10 @@ public class FamilyInviteBootReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         if (!Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) return;
         SharedPreferences prefs = context.getSharedPreferences("family-assist", Context.MODE_PRIVATE);
-        if (!"family".equals(prefs.getString("selectedAppRole", ""))
-                || !"family".equals(prefs.getString("memberRole", ""))
+        String selectedRole = prefs.getString("selectedAppRole", "");
+        String memberRole = prefs.getString("memberRole", "");
+        if (!("family".equals(selectedRole) || "elder".equals(selectedRole))
+                || !selectedRole.equals(memberRole)
                 || prefs.getString("authToken", "").isEmpty()) {
             return;
         }

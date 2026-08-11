@@ -76,18 +76,28 @@ public class FamilyInviteMonitorService extends Service {
         String pairCode = prefs.getString("pairCode", "");
         String authToken = prefs.getString("authToken", "");
         String baseUrl = prefs.getString("baseUrl", "");
-        if (!"family".equals(role) || pairCode.isEmpty() || authToken.isEmpty() || baseUrl.isEmpty()) {
+        if (!("family".equals(role) || "elder".equals(role))
+                || pairCode.isEmpty() || authToken.isEmpty() || baseUrl.isEmpty()) {
             stopSelf();
             return;
         }
         polling = true;
         io.execute(() -> {
             try {
-                JSONObject result = NetworkClient.getJson(baseUrl,
-                        "/api/help/invite?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
-                JSONObject invitation = result.optJSONObject("invitation");
-                if (invitation != null && "pending".equals(invitation.optString("status", "pending"))) {
-                    AssistNotifier.handleHelpInvite(this, invitation);
+                if ("family".equals(role)) {
+                    JSONObject result = NetworkClient.getJson(baseUrl,
+                            "/api/help/invite?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
+                    JSONObject invitation = result.optJSONObject("invitation");
+                    if (invitation != null && "pending".equals(invitation.optString("status", "pending"))) {
+                        AssistNotifier.handleHelpInvite(this, invitation);
+                    }
+                } else {
+                    JSONObject result = NetworkClient.getJson(baseUrl,
+                            "/api/help/family-request?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
+                    JSONObject request = result.optJSONObject("request");
+                    if (request != null && "pending".equals(request.optString("status", "pending"))) {
+                        AssistNotifier.handleFamilyAssistRequest(this, request);
+                    }
                 }
             } catch (Exception ignored) {
             } finally {
@@ -104,7 +114,7 @@ public class FamilyInviteMonitorService extends Service {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
-                "家人求助监听",
+                "亲情协助提醒",
                 NotificationManager.IMPORTANCE_LOW);
         channel.setDescription("保持家人求助提醒可及时送达");
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
@@ -123,8 +133,8 @@ public class FamilyInviteMonitorService extends Service {
                 ? new Notification.Builder(this, CHANNEL_ID)
                 : new Notification.Builder(this);
         return builder
-                .setContentTitle("家人求助提醒已开启")
-                .setContentText("收到指定求助时会立即提醒你")
+                .setContentTitle("亲情协助提醒已开启")
+                .setContentText("收到家人协助请求时会及时提醒")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)

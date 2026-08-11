@@ -15,7 +15,7 @@ const host = process.env.HOST || "0.0.0.0";
 const families = new Map();
 const users = new Map();
 const MAX_FAMILY_MEMBERS = 5;
-const HELP_INVITE_TTL_MS = 2 * 60 * 1000;
+const HELP_INVITE_TTL_MS = 10 * 60 * 1000;
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES || 8 * 1024 * 1024);
 const DATA_DIR = process.env.RELAY_DATA_DIR || path.join(__dirname, "..", ".data");
 const STATE_FILE = process.env.RELAY_STATE_FILE || path.join(DATA_DIR, "relay-state.json");
@@ -123,6 +123,7 @@ function newFamily() {
     targetHelperRef: "",
     targetHelperName: "",
     pendingHelpInvitation: null,
+    pendingFamilyAssistRequest: null,
     pendingBindRequests: [],
     audit: [],
     crashes: [],
@@ -388,6 +389,10 @@ function publicFamily(family, member, authToken) {
     helperIsCurrent: Boolean(authToken) && family.activeHelperToken === authToken,
     helperName: family.activeHelperName,
     targetHelperName: family.targetHelperName,
+    targetHelperRef: member && member.role === "elder" ? family.targetHelperRef : "",
+    activeHelperRef: member && member.role === "elder" && family.activeHelperToken
+      ? memberReference(family.activeHelperToken, family.members.get(family.activeHelperToken))
+      : "",
     targetedForCurrent: !family.targetHelperRef
       || (member && member.role === "elder")
       || (member && member.role === "family" && memberReference(authToken, member) === family.targetHelperRef),
@@ -400,6 +405,7 @@ function publicFamily(family, member, authToken) {
       }))
       : [],
     helpInvitation: publicHelpInvitation(family, member, authToken),
+    familyAssistRequest: publicFamilyAssistRequest(family, member, authToken),
     pendingBindCount: pendingBindRequests.length,
     pendingBindRequests: member && member.role === "elder"
       ? pendingBindRequests.map((item) => ({
@@ -428,10 +434,32 @@ function publicHelpInvitation(family, member, authToken) {
     id: invitation.id,
     status: invitation.status,
     elderName: invitation.elderName,
+    targetHelperRef: member.role === "elder" ? invitation.targetHelperRef : "",
     targetHelperName: invitation.targetHelperName,
     createdAt: invitation.createdAt,
     updatedAt: invitation.updatedAt,
     expiresAt: invitation.expiresAt,
+  };
+}
+
+function publicFamilyAssistRequest(family, member, authToken) {
+  const request = family.pendingFamilyAssistRequest;
+  if (!request) return null;
+  if (request.status === "pending" && Date.now() > Number(request.expiresAt || 0)) {
+    request.status = "expired";
+    request.updatedAt = new Date().toISOString();
+    scheduleSave();
+  }
+  const currentRef = member && member.role === "family" ? memberReference(authToken, member) : "";
+  if (!member || (member.role === "family" && request.helperRef !== currentRef)) return null;
+  return {
+    id: request.id,
+    status: request.status,
+    helperName: request.helperName,
+    elderName: request.elderName,
+    createdAt: request.createdAt,
+    updatedAt: request.updatedAt,
+    expiresAt: request.expiresAt,
   };
 }
 
@@ -505,6 +533,11 @@ function serializeFamily(family) {
       && Date.now() <= Number(family.pendingHelpInvitation.expiresAt || 0)
       ? family.pendingHelpInvitation
       : null,
+    pendingFamilyAssistRequest: family.pendingFamilyAssistRequest
+      && family.pendingFamilyAssistRequest.status === "pending"
+      && Date.now() <= Number(family.pendingFamilyAssistRequest.expiresAt || 0)
+      ? family.pendingFamilyAssistRequest
+      : null,
     pendingBindRequests: (family.pendingBindRequests || []).filter((item) => Date.now() <= Number(item.expiresAt || 0)),
     members: [...family.members.entries()],
     webrtc: {
@@ -536,6 +569,11 @@ function hydrateFamily(raw) {
       && ((family.pendingHelpInvitation.status !== "pending" && family.pendingHelpInvitation.status !== "accepted")
         || Date.now() > Number(family.pendingHelpInvitation.expiresAt || 0))) {
     family.pendingHelpInvitation = null;
+  }
+  if (family.pendingFamilyAssistRequest
+      && (family.pendingFamilyAssistRequest.status !== "pending"
+        || Date.now() > Number(family.pendingFamilyAssistRequest.expiresAt || 0))) {
+    family.pendingFamilyAssistRequest = null;
   }
   family.webrtc = {
     offer: null,
@@ -636,6 +674,7 @@ function resetSessionState(family) {
   family.targetHelperRef = "";
   family.targetHelperName = "";
   family.pendingHelpInvitation = null;
+  family.pendingFamilyAssistRequest = null;
   family.updatedAt = new Date().toISOString();
   family.webrtc = {
     offer: null,
@@ -1177,6 +1216,113 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/help/family-request") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const result = requireMember(res, pairCode, authToken, "family");
+      if (!result) return;
+      if (result.family.active) {
+        sendJson(res, 409, { error: "assist session is active" });
+        return;
+      }
+      const helperRef = memberReference(authToken, result.member);
+      const existing = result.family.pendingFamilyAssistRequest;
+      if (existing && existing.status === "pending" && Date.now() <= Number(existing.expiresAt || 0)) {
+        if (existing.helperRef !== helperRef) {
+          sendJson(res, 409, { error: "another family assist request is pending" });
+          return;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          request: publicFamilyAssistRequest(result.family, result.member, authToken),
+        });
+        return;
+      }
+      const now = new Date().toISOString();
+      result.family.pendingFamilyAssistRequest = {
+        id: makeId("family_help"),
+        status: "pending",
+        helperRef,
+        helperName: result.member.name || "家属",
+        elderName: result.family.elderName || "长辈",
+        createdAt: now,
+        updatedAt: now,
+        expiresAt: Date.now() + HELP_INVITE_TTL_MS,
+      };
+      result.family.updatedAt = now;
+      audit(result.family, "family_assist_requested", {
+        requestId: result.family.pendingFamilyAssistRequest.id,
+        helperName: result.family.pendingFamilyAssistRequest.helperName,
+      });
+      sendJson(res, 200, {
+        ok: true,
+        request: publicFamilyAssistRequest(result.family, result.member, authToken),
+      });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/help/family-request") {
+      const pairCode = String(url.searchParams.get("pairCode") || "").trim();
+      const authToken = String(url.searchParams.get("authToken") || "").trim();
+      const result = requireMember(res, pairCode, authToken);
+      if (!result) return;
+      sendJson(res, 200, {
+        ok: true,
+        request: publicFamilyAssistRequest(result.family, result.member, authToken),
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/help/family-request/respond") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const requestId = String(payload.requestId || "").trim();
+      const accepted = Boolean(payload.accepted);
+      const result = requireMember(res, pairCode, authToken, "elder");
+      if (!result) return;
+      const request = result.family.pendingFamilyAssistRequest;
+      if (!request || request.id !== requestId) {
+        sendJson(res, 404, { error: "family assist request not found" });
+        return;
+      }
+      if (request.status !== "pending" || Date.now() > Number(request.expiresAt || 0)) {
+        request.status = "expired";
+        request.updatedAt = new Date().toISOString();
+        scheduleSave();
+        sendJson(res, 409, { error: "family assist request expired" });
+        return;
+      }
+      const now = new Date().toISOString();
+      request.status = accepted ? "accepted" : "declined";
+      request.updatedAt = now;
+      if (accepted) {
+        request.expiresAt = Date.now() + HELP_INVITE_TTL_MS;
+        result.family.pendingHelpInvitation = {
+          id: request.id,
+          status: "accepted",
+          elderName: result.family.elderName || "长辈",
+          targetHelperRef: request.helperRef,
+          targetHelperName: request.helperName,
+          createdAt: request.createdAt,
+          updatedAt: now,
+          expiresAt: request.expiresAt,
+        };
+      }
+      result.family.updatedAt = now;
+      audit(result.family, accepted ? "family_assist_request_accepted" : "family_assist_request_declined", {
+        requestId,
+        helperName: request.helperName,
+      });
+      sendJson(res, 200, {
+        ok: true,
+        request: publicFamilyAssistRequest(result.family, result.member, authToken),
+        helpInvitation: accepted ? publicHelpInvitation(result.family, result.member, authToken) : null,
+      });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/help/invite") {
       const payload = JSON.parse((await readBody(req)).toString("utf8"));
       const pairCode = String(payload.pairCode || "").trim();
@@ -1315,6 +1461,7 @@ const server = http.createServer(async (req, res) => {
       family.targetHelperRef = targetHelperRef;
       family.targetHelperName = targetHelper ? (targetHelper[1].name || "家属") : "";
       family.pendingHelpInvitation = null;
+      family.pendingFamilyAssistRequest = null;
       family.webrtc = {
         offer: null,
         answer: null,
