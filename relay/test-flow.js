@@ -60,6 +60,20 @@ async function run() {
   const familyAccount = await post("/api/account/login", { phone: "13800000002", password: "familyPass123", name: "女儿" });
   assert(elderAccount.status === 200 && elderAccount.body.accountToken, "elder account should log in with password");
   assert(familyAccount.status === 200 && familyAccount.body.accountToken, "family account should log in with password");
+  assert(elderAccount.body.user.appRole === "" && familyAccount.body.user.appRole === "",
+    "new accounts should choose an app role after login");
+  const elderRole = await post("/api/account/role", {
+    accountToken: elderAccount.body.accountToken,
+    appRole: "elder",
+  });
+  const familyRole = await post("/api/account/role", {
+    accountToken: familyAccount.body.accountToken,
+    appRole: "family",
+  });
+  assert(elderRole.status === 200 && elderRole.body.user.appRole === "elder",
+    "elder role should persist on the account");
+  assert(familyRole.status === 200 && familyRole.body.user.appRole === "family",
+    "family role should persist on the account");
 
   const resetRegister = await post("/api/account/register", { phone: "13800000003", password: "beforeReset123", name: "测试账号" });
   assert(resetRegister.status === 200, "reset test account should register");
@@ -145,6 +159,11 @@ async function run() {
     "selected relative must explicitly accept the invitation");
   assert(targetedHelp.status === 200 && targetedHelp.body.family.targetHelperName === "女儿",
     "elder should be able to request a selected relative");
+  const roleDuringAssist = await post("/api/account/role", {
+    accountToken: elderAccount.body.accountToken,
+    appRole: "family",
+  });
+  assert(roleDuringAssist.status === 409, "account role must not change during an active assistance session");
   const targetedJoin = await get(`/api/help?pairCode=${securePairCode}&authToken=${pendingDone.body.authToken}`);
   assert(targetedJoin.body.helperIsCurrent && targetedJoin.body.targetedForCurrent,
     "the selected relative should join the targeted session");
@@ -155,6 +174,8 @@ async function run() {
   });
   const elderRelogin = await post("/api/account/login", { phone: "13800000001", password: "elderPass123" });
   const familyRelogin = await post("/api/account/login", { phone: "13800000002", password: "familyPass123" });
+  assert(elderRelogin.body.user.appRole === "elder" && familyRelogin.body.user.appRole === "family",
+    "account role should survive logout, login, and device changes");
   assert(elderRelogin.body.memberships.some((item) => item.role === "elder" && item.pairCode === securePairCode),
     "elder login should restore an existing family membership");
   assert(familyRelogin.body.memberships.some((item) => item.role === "family" && item.pairCode === securePairCode),

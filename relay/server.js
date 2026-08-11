@@ -272,8 +272,20 @@ function publicUser(user) {
     id: user.id,
     phone: user.phone,
     name: user.name,
+    appRole: user.appRole === "elder" || user.appRole === "family" ? user.appRole : "",
     createdAt: user.createdAt,
   };
+}
+
+function accountHasActiveAssistance(accountToken) {
+  if (!accountToken) return false;
+  for (const family of families.values()) {
+    if (!family.active) continue;
+    for (const member of family.members.values()) {
+      if (member.accountToken === accountToken) return true;
+    }
+  }
+  return false;
 }
 
 function membershipsForAccount(accountToken) {
@@ -680,6 +692,7 @@ const server = http.createServer(async (req, res) => {
         id: makeId("user"),
         phone,
         name,
+        appRole: "",
         passwordHash: hashPassword(password),
         createdAt: nowIso,
         lastLoginAt: nowIso,
@@ -857,6 +870,34 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 403, { error: "not logged in" });
         return;
       }
+      sendJson(res, 200, {
+        ok: true,
+        user: publicUser(user),
+        memberships: membershipsForAccount(accountToken),
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/account/role") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const accountToken = String(payload.accountToken || "").trim();
+      const appRole = String(payload.appRole || "").trim();
+      const user = userForToken(accountToken);
+      if (!user) {
+        sendJson(res, 403, { error: "not logged in" });
+        return;
+      }
+      if (appRole !== "elder" && appRole !== "family") {
+        sendJson(res, 400, { error: "valid app role is required" });
+        return;
+      }
+      if (accountHasActiveAssistance(accountToken)) {
+        sendJson(res, 409, { error: "assist session is active" });
+        return;
+      }
+      user.appRole = appRole;
+      user.roleUpdatedAt = new Date().toISOString();
+      scheduleSave();
       sendJson(res, 200, {
         ok: true,
         user: publicUser(user),
