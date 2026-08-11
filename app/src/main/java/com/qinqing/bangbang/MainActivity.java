@@ -26,7 +26,11 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.Settings;
+import android.text.SpannableString;
 import android.text.InputType;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.RelativeSizeSpan;
+import android.text.style.StyleSpan;
 import android.view.inputmethod.EditorInfo;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -43,6 +47,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -153,7 +158,10 @@ public class MainActivity extends Activity {
     private Button familyControlRequestButton;
     private Button familyRemoteButton;
     private Button familyEndButton;
+    private ImageButton familyMoreButton;
     private LinearLayout familyActionBar;
+    private TextView familyPageTitleView;
+    private View familyBottomNav;
     private TextView familyScreenLabelView;
     private FrameLayout familyScreenSurface;
     private ImageButton familyFullscreenButton;
@@ -219,16 +227,16 @@ public class MainActivity extends Activity {
         }
     };
 
-    private static final int COLOR_BG = 0xFFFFF9FA;
+    private static final int COLOR_BG = 0xFFFFF8F9;
     private static final int COLOR_SURFACE = 0xFFFFFFFF;
     private static final int COLOR_TEXT = 0xFF2B2528;
-    private static final int COLOR_MUTED = 0xFF746A6E;
-    private static final int COLOR_LINE = 0xFFEADFE2;
-    private static final int COLOR_BRAND = 0xFFF2556F;
-    private static final int COLOR_BLUE = 0xFFD83F5F;
-    private static final int COLOR_BLUE_DARK = 0xFFB62D4A;
-    private static final int COLOR_FAMILY = 0xFF6558C9;
-    private static final int COLOR_CONTROL = 0xFF356AE6;
+    private static final int COLOR_MUTED = 0xFF70666A;
+    private static final int COLOR_LINE = 0xFFE9DDE0;
+    private static final int COLOR_BRAND = 0xFFF0526E;
+    private static final int COLOR_BLUE = 0xFFD93E5F;
+    private static final int COLOR_BLUE_DARK = 0xFFB72E4D;
+    private static final int COLOR_FAMILY = 0xFFD93E5F;
+    private static final int COLOR_CONTROL = 0xFF9F3650;
     private static final int COLOR_SUCCESS = 0xFF278A65;
     private static final int COLOR_WARNING = 0xFFE58A28;
     private static final int COLOR_RED = 0xFFD83F4B;
@@ -469,11 +477,11 @@ public class MainActivity extends Activity {
         elderButton.setOnClickListener(v -> confirmInitialRole("elder"));
         familyButton.setOnClickListener(v -> confirmInitialRole("family"));
 
-        LinearLayout elderCard = actionCard("我需要家人帮助", "显示求助、家属管理和安全设置", COLOR_WARM);
+        LinearLayout elderCard = actionCard("我是长辈", "需要帮助时，让家人看屏幕并协助", COLOR_WARM);
         elderCard.addView(elderButton);
         root.addView(elderCard);
 
-        LinearLayout familyCard = actionCard("我来帮助长辈", "显示长辈管理、求助提醒和协助功能", 0xFFF3F1FF);
+        LinearLayout familyCard = actionCard("我是家属", "接收求助，查看屏幕并给长辈提示", 0xFFFFF1F4);
         familyCard.addView(familyButton);
         root.addView(familyCard);
 
@@ -622,19 +630,26 @@ public class MainActivity extends Activity {
         privacyButton.setOnClickListener(v -> showPrivacyPolicy());
         deleteButton.setOnClickListener(v -> showDeleteAccount());
 
-        LinearLayout settingsCard = card("账号与家庭", "");
         if (isLoggedIn()) {
             root.addView(profileSummary());
         }
-        settingsCard.addView(roleButton);
-        settingsCard.addView(relativesButton);
-        if ("elder".equals(selectedAppRole)) settingsCard.addView(safetyButton);
-        settingsCard.addView(privacyButton);
+
+        LinearLayout familySettings = card("家庭与身份", "");
+        familySettings.addView(roleButton);
+        familySettings.addView(relativesButton);
+        root.addView(familySettings);
+
+        LinearLayout privacySettings = card("安全与隐私", "");
+        if ("elder".equals(selectedAppRole)) privacySettings.addView(safetyButton);
+        privacySettings.addView(privacyButton);
+        root.addView(privacySettings);
+
         if (isLoggedIn()) {
-            settingsCard.addView(accountButton);
-            settingsCard.addView(deleteButton);
+            LinearLayout accountSettings = card("账号", "");
+            accountSettings.addView(accountButton);
+            accountSettings.addView(deleteButton);
+            root.addView(accountSettings);
         }
-        root.addView(settingsCard);
 
         LinearLayout aboutCard = card("亲情帮帮", "版本 " + appVersionText());
         root.addView(aboutCard);
@@ -701,8 +716,8 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         elderBindPolling = false;
         root = verticalRoot();
-        root.addView(pageHeader("登录", this::finish));
-        root.addView(authBrandPanel("欢迎回来", "登录后继续连接你的家人"));
+        root.addView(appBrandHeader("让家人远程看屏幕并协助操作"));
+        root.addView(compactPageTitle("登录"));
         status = notice("");
         status.setVisibility(View.GONE);
 
@@ -755,7 +770,6 @@ public class MainActivity extends Activity {
         elderBindPolling = false;
         root = verticalRoot();
         root.addView(pageHeader("注册账号", () -> showLogin("auth")));
-        root.addView(authBrandPanel("创建家庭账号", "绑定亲属前先确认彼此身份"));
         status = notice("");
         status.setVisibility(View.GONE);
 
@@ -809,7 +823,7 @@ public class MainActivity extends Activity {
         });
         loginButton.setOnClickListener(v -> showLogin(afterRole));
 
-        LinearLayout registerCard = card("", "");
+        LinearLayout registerCard = card("创建家庭账号", "注册后，可以添加长辈或家属。");
         registerCard.addView(label("手机号"));
         registerCard.addView(phoneInput);
         registerCard.addView(label("密码"));
@@ -835,7 +849,6 @@ public class MainActivity extends Activity {
         elderBindPolling = false;
         root = verticalRoot();
         root.addView(pageHeader("找回密码", () -> showLogin(afterRole)));
-        root.addView(authBrandPanel("重新设置密码", "验证码会发送到注册手机号"));
         status = notice("");
         status.setVisibility(View.GONE);
 
@@ -867,7 +880,7 @@ public class MainActivity extends Activity {
             );
         });
 
-        LinearLayout form = card("验证手机号", "验证码 10 分钟内有效。");
+        LinearLayout form = card("重新设置密码", "验证码会发送到注册手机号，10 分钟内有效。");
         form.addView(label("手机号"));
         form.addView(phoneInput);
         form.addView(codeButton);
@@ -1062,7 +1075,7 @@ public class MainActivity extends Activity {
         elderScreenVisible = true;
         boolean assisting = prefs.getBoolean("assistActive", false);
         root = verticalRoot();
-        root.addView(hero("长辈求助", assisting ? "家人正在查看你的屏幕" : "需要帮助时，向家人发起求助"));
+        root.addView(hero("找家人帮忙", assisting ? "家人正在帮助你" : "需要帮助时，只需点一次"));
         String pendingAssistMessage = prefs.getString("pendingAssistMessage", "");
         if (!pendingAssistMessage.isEmpty()) {
             prefs.edit().remove("pendingAssistMessage").apply();
@@ -1072,7 +1085,7 @@ public class MainActivity extends Activity {
 
         if (!isBoundAs("elder")) {
             EditText nameInput = input("长辈名称，例如 妈妈", displayName);
-            Button inviteButton = primaryButton("第 1 步：生成亲属绑定码");
+            Button inviteButton = primaryButton("生成家属绑定码");
             inviteButton.setOnClickListener(v -> {
                 displayName = nameInput.getText().toString().trim();
                 if (displayName.isEmpty()) {
@@ -1104,7 +1117,6 @@ public class MainActivity extends Activity {
         Button helpButton = primaryButton(elderPrimaryButtonText());
         helpButton.setTextSize(24);
         Button stopButton = dangerButton("结束本次求助");
-        Button safetyButton = secondaryButton("更多设置");
 
         helpButton.setOnClickListener(v -> {
             pendingTargetHelperRef = "";
@@ -1114,9 +1126,7 @@ public class MainActivity extends Activity {
             handleElderPrimaryAction();
         });
         stopButton.setOnClickListener(v -> stopAssistance("本次求助已结束。"));
-        safetyButton.setOnClickListener(v -> showSafetySettings());
-
-        LinearLayout stepsCard = card(assisting ? "家人正在帮你" : elderCurrentStepTitle(), elderAssistHintText());
+        LinearLayout stepsCard = card(assisting ? "协助进行中" : elderCurrentStepTitle(), elderAssistHintText());
         if (assisting) {
             root.addView(stepsCard);
             root.addView(stopButton);
@@ -1124,7 +1134,6 @@ public class MainActivity extends Activity {
             root.addView(helpButton);
             root.addView(stepsCard);
             root.addView(status);
-            root.addView(safetyButton);
         }
         root.addView(bottomNav("elder"));
         setContentView(scroll(root));
@@ -1512,25 +1521,26 @@ public class MainActivity extends Activity {
         lastFrameReceivedAtMs = 0;
         lastFrameUpdatedAt = "";
         root = verticalRoot();
-        root.addView(compactPageTitle("协助长辈"));
+        familyPageTitleView = compactPageTitle("协助长辈");
+        root.addView(familyPageTitleView);
         status = stableNotice("连接正常");
         status.setVisibility(View.GONE);
         View screenView = buildFrameView();
 
-        familyControlRequestButton = familySecondaryButton("请求远程操作授权");
+        familyControlRequestButton = familySecondaryButton("申请远程操作");
         familyRemoteButton = controlPrimaryButton("远程操作");
         familyEndButton = dangerButton("结束本次协助");
-        familyChangeBindingButton = familySecondaryButton("查看我的长辈");
+        familyChangeBindingButton = familySecondaryButton("选择长辈");
         familyControlRequestButton.setOnClickListener(v -> requestRemoteControl(familyControlRequestButton));
         familyRemoteButton.setOnClickListener(v -> showRemoteControlPanel());
         familyEndButton.setOnClickListener(v -> endFamilyAssistView());
         familyChangeBindingButton.setOnClickListener(v -> showRelativesManagement());
 
         root.addView(status);
-        familyWaitingView = card("等待求助", "长辈发起求助后，屏幕会自动显示。");
+        familyWaitingView = card("暂时没有新的求助", "收到长辈求助后，屏幕会自动显示。");
         familyWaitingTitle = (TextView) familyWaitingView.getChildAt(0);
         familyWaitingCaption = (TextView) familyWaitingView.getChildAt(1);
-        familyScreenLabelView = screenLabel("长辈实时屏幕");
+        familyScreenLabelView = screenLabel("长辈的屏幕");
         familyScreenLabelView.setTextColor(COLOR_FAMILY);
         familyScreenSurface = screenSurface(screenView);
         familyFullscreenButton = fullscreenIconButton(R.drawable.ic_fullscreen, "全屏查看");
@@ -1543,7 +1553,8 @@ public class MainActivity extends Activity {
         root.addView(familyScreenSurface);
         familyActionBar = buildFamilyActionBar();
         setFamilySessionActive(false);
-        setContentView(familyPage(root, familyActionBar, bottomNav("family")));
+        familyBottomNav = bottomNav("family");
+        setContentView(familyPage(root, familyActionBar, familyBottomNav));
         ensureFamilyInviteNotifications();
         startFamilyPollLoop();
         main.postDelayed(this::maybeShowFamilyHelpInvitation, 250);
@@ -1949,10 +1960,43 @@ public class MainActivity extends Activity {
         bar.setBackground(rounded(0xFFFFFFFF, 0, COLOR_LINE));
         addFamilyAction(bar, familyControlRequestButton);
         addFamilyAction(bar, familyRemoteButton);
-        addFamilyAction(bar, familyEndButton);
         addFamilyAction(bar, familyChangeBindingButton);
+        familyMoreButton = new ImageButton(this);
+        familyMoreButton.setImageResource(R.drawable.ic_more_vert);
+        familyMoreButton.setColorFilter(COLOR_TEXT);
+        familyMoreButton.setContentDescription("更多操作");
+        familyMoreButton.setPadding(dp(12), dp(12), dp(12), dp(12));
+        familyMoreButton.setBackground(rounded(0xFFFFF4F6, dp(8), COLOR_LINE));
+        familyMoreButton.setOnClickListener(this::showFamilyMoreMenu);
+        LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(dp(50), dp(50));
+        moreParams.setMargins(dp(4), 0, dp(4), 0);
+        bar.addView(familyMoreButton, moreParams);
         familyRemoteButton.setVisibility(View.GONE);
+        familyMoreButton.setVisibility(View.GONE);
         return bar;
+    }
+
+    private void showFamilyMoreMenu(View anchor) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+        menu.getMenu().add("查看我的长辈");
+        if (familyLastActive) {
+            menu.getMenu().add("结束本次协助");
+        }
+        menu.setOnMenuItemClickListener(item -> {
+            String title = String.valueOf(item.getTitle());
+            if ("结束本次协助".equals(title)) {
+                new AlertDialog.Builder(this)
+                        .setTitle("结束本次协助？")
+                        .setMessage("结束后，长辈的屏幕共享和远程操作授权会立即关闭。")
+                        .setPositiveButton("结束协助", (dialog, which) -> endFamilyAssistView())
+                        .setNegativeButton("继续协助", null)
+                        .show();
+            } else {
+                showRelativesManagement();
+            }
+            return true;
+        });
+        menu.show();
     }
 
     private void openFamilyFullscreen() {
@@ -3008,9 +3052,10 @@ public class MainActivity extends Activity {
     }
 
     private void setFamilySessionActionsVisible(boolean visible) {
-        if (familyEndButton != null) familyEndButton.setVisibility(visible ? View.VISIBLE : View.GONE);
+        if (familyEndButton != null) familyEndButton.setVisibility(View.GONE);
         if (familyControlRequestButton != null) familyControlRequestButton.setVisibility(visible ? View.VISIBLE : View.GONE);
         if (familyRemoteButton != null) familyRemoteButton.setVisibility(View.GONE);
+        if (familyMoreButton != null) familyMoreButton.setVisibility(visible ? View.VISIBLE : View.GONE);
     }
 
     private void setFamilySessionActive(boolean active) {
@@ -3022,15 +3067,16 @@ public class MainActivity extends Activity {
         } else {
             closeFamilyFullscreen();
             familyMediaReady = false;
-            updateFamilyWaiting("等待求助", "长辈发起求助后，屏幕会自动显示。");
+            updateFamilyWaiting("暂时没有新的求助", "收到长辈求助后，屏幕会自动显示。");
             updateFamilyControlButton(false, false);
             resizeFamilyScreenSurface(dp(500));
         }
         if (familyWaitingView != null) familyWaitingView.setVisibility(active && familyMediaReady ? View.GONE : View.VISIBLE);
-        if (familyScreenLabelView != null) familyScreenLabelView.setVisibility(active && familyMediaReady ? View.VISIBLE : View.GONE);
+        if (familyScreenLabelView != null) familyScreenLabelView.setVisibility(View.GONE);
         if (familyScreenSurface != null) familyScreenSurface.setVisibility(active && familyMediaReady ? View.VISIBLE : View.GONE);
         if (familyFullscreenButton != null) familyFullscreenButton.setVisibility(active && familyMediaReady ? View.VISIBLE : View.GONE);
         if (familyChangeBindingButton != null) familyChangeBindingButton.setVisibility(active ? View.GONE : View.VISIBLE);
+        if (familyBottomNav != null) familyBottomNav.setVisibility(active ? View.GONE : View.VISIBLE);
         setFamilySessionActionsVisible(active);
     }
 
@@ -3062,7 +3108,7 @@ public class MainActivity extends Activity {
             familyFullscreenButton.bringToFront();
         }
         familyWaitingView.setVisibility(View.GONE);
-        familyScreenLabelView.setVisibility(View.VISIBLE);
+        familyScreenLabelView.setVisibility(View.GONE);
         familyScreenSurface.setVisibility(View.VISIBLE);
         setStatus(stateText);
     }
@@ -3117,7 +3163,7 @@ public class MainActivity extends Activity {
                         ? "" : familyAssistRequest.optString("status", "");
                 String requestedElderName = familyAssistRequest == null
                         ? "长辈" : familyAssistRequest.optString("elderName", "长辈");
-                if (!active) {
+                    if (!active) {
                     main.post(() -> {
                         familyLastSessionId = "";
                         stopFamilyWebRtc();
@@ -3134,6 +3180,10 @@ public class MainActivity extends Activity {
                         } else if ("declined".equals(familyAssistRequestState)) {
                             updateFamilyWaiting(requestedElderName + "暂时不需要协助",
                                     "你可以稍后从“长辈”页面再次发起请求。 ");
+                        }
+                        if (familyPageTitleView != null) familyPageTitleView.setText("协助长辈");
+                        if (wasActive) {
+                            updateFamilyWaiting("本次协助已结束", "需要继续时，可在“长辈”页面重新发起。");
                         }
                         setStatus(wasActive
                                 ? "本次协助已结束"
@@ -3179,6 +3229,8 @@ public class MainActivity extends Activity {
                     prefs.edit().remove("pendingFamilyHelpInvitation").apply();
                     AssistNotifier.cancelHelpInviteNotification(this);
                     setFamilySessionActive(true);
+                    if (familyPageTitleView != null) familyPageTitleView.setText("协助" + elderName);
+                    if (familyScreenLabelView != null) familyScreenLabelView.setText(elderName + "的屏幕");
                     updateFamilyControlState(controlRequested, familyControlAllowed,
                             controlDecision, controlReason, controlUpdatedAt);
                     if (!sessionId.equals(familyLastSessionId)
@@ -3209,7 +3261,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 familyLastActive = false;
-                main.post(() -> setStatus("连接服务暂时不可用，正在重试"));
+                main.post(() -> setStatus("网络不稳定，正在重连"));
             } finally {
                 familyPollInFlight = false;
             }
@@ -3246,7 +3298,7 @@ public class MainActivity extends Activity {
                     main.post(() -> clearBindingAndShowSetup("绑定已失效，请重新完成亲属绑定。"));
                     return;
                 }
-                main.post(() -> setStatus("画面接收较慢，正在重试"));
+                main.post(() -> setStatus("网络不稳定，正在重新获取画面"));
             } finally {
                 familyFrameInFlight = false;
             }
@@ -4195,29 +4247,29 @@ public class MainActivity extends Activity {
 
     private String elderPrimaryButtonText() {
         if (needsOverlayPermission()) {
-            return "允许画圈提示";
+            return "完成首次设置";
         }
         return "请家人帮忙";
     }
 
     private String elderCurrentStepTitle() {
         if (needsOverlayPermission()) {
-            return "先完成一次权限设置";
+            return "首次使用需要设置";
         }
-        return "准备发起求助";
+        return "准备好了";
     }
 
     private String elderAssistHintText() {
         if (prefs.getBoolean("assistActive", false)) {
-            return "请打开需要帮助的应用。家人可以查看屏幕并给出提示；结束时回到这里点“结束本次求助”。";
+            return "现在可以打开需要帮助的应用。结束时回到这里点“结束本次求助”。";
         }
         if (needsOverlayPermission()) {
-            return "只需要设置一次。点蓝色按钮后，在系统页允许“显示在其他应用上层”，再按返回键回来。";
+            return "只需设置一次。按提示允许画圈显示，然后返回这里。";
         }
         if (!isAccessibilityServiceEnabled()) {
-            return "点“请家人帮忙”，再在系统弹窗中点“立即开始”。";
+            return "点上面的按钮，再在系统提示中点“立即开始”。";
         }
-        return "点“请家人帮忙”，确认屏幕共享后，家人就能看到画面。";
+        return "点上面的按钮并确认屏幕共享，家人就能看到画面。";
     }
 
     private String bindingStatusText() {
@@ -4565,24 +4617,6 @@ public class MainActivity extends Activity {
         return layout;
     }
 
-    private LinearLayout authBrandPanel(String heading, String message) {
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(16), dp(14), dp(16), dp(14));
-        panel.setBackground(rounded(0xFFFFEEF3, dp(8), 0xFFF2CCD6));
-        LinearLayout.LayoutParams params = fullWidthParams();
-        params.setMargins(0, 0, 0, dp(12));
-        panel.setLayoutParams(params);
-        TextView headingView = sectionTitle(heading);
-        headingView.setTextColor(COLOR_BLUE_DARK);
-        TextView messageView = caption(message + "\n看屏幕  ·  画圈提示  ·  授权后远程操作");
-        messageView.setTextColor(0xFF76515C);
-        messageView.setPadding(0, 0, 0, 0);
-        panel.addView(headingView);
-        panel.addView(messageView);
-        return panel;
-    }
-
     private LinearLayout actionCard(String heading, String message, int tint) {
         LinearLayout layout = card(heading, message);
         layout.setBackground(rounded(tint, dp(8), Color.TRANSPARENT));
@@ -4591,7 +4625,13 @@ public class MainActivity extends Activity {
 
     private TextView settingsRow(String heading, String message) {
         TextView row = new TextView(this);
-        row.setText(heading + "\n" + message);
+        String value = heading + "\n" + message;
+        SpannableString styled = new SpannableString(value);
+        styled.setSpan(new StyleSpan(Typeface.BOLD), 0, heading.length(), 0);
+        int detailStart = heading.length() + 1;
+        styled.setSpan(new ForegroundColorSpan(COLOR_MUTED), detailStart, value.length(), 0);
+        styled.setSpan(new RelativeSizeSpan(0.86f), detailStart, value.length(), 0);
+        row.setText(styled);
         row.setTextColor(COLOR_TEXT);
         row.setTextSize(16);
         row.setLineSpacing(dp(3), 1f);
@@ -4734,14 +4774,14 @@ public class MainActivity extends Activity {
 
     private TextView caption(String text) {
         TextView view = body(text);
-        view.setTextSize(14);
+        view.setTextSize(15);
         view.setPadding(0, 0, 0, dp(12));
         return view;
     }
 
     private TextView notice(String text) {
         TextView view = body(text);
-        view.setTextSize(14);
+        view.setTextSize(15);
         view.setTextColor(0xFF4B5563);
         view.setPadding(dp(12), dp(8), dp(12), dp(8));
         view.setBackground(rounded(0xFFF8FAFC, dp(8), COLOR_LINE));
