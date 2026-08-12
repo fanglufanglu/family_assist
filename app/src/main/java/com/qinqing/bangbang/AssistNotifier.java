@@ -232,8 +232,8 @@ final class AssistNotifier {
         String helperName = request.optString("helperName", "家属");
         showFamilyAssistRequestNotification(context, helperName);
         showUrgentOverlay(context,
-                helperName + "想帮你操作手机",
-                "请打开亲情帮帮，确认是否接受本次协助。",
+                helperName + "请求协助你",
+                "请打开亲情帮帮，先确认本次协助请求。",
                 "family-assist-request:" + id);
     }
 
@@ -251,14 +251,14 @@ final class AssistNotifier {
                 ? new Notification.Builder(context, CHANNEL_URGENT)
                 : new Notification.Builder(context);
         Notification notification = builder
-                .setContentTitle(helperName + "想帮助你")
-                .setContentText("点这里确认是否接受本次手机协助。")
+                .setContentTitle(helperName + "请求协助你")
+                .setContentText("点这里确认本次协助请求。")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
                 .setCategory(Notification.CATEGORY_CALL)
                 .setColor(0xFFD83F5F)
                 .setStyle(new Notification.BigTextStyle()
-                        .bigText("只有你明确同意并确认屏幕共享后，家属才能开始协助。"))
+                        .bigText("先确认协助请求，再由系统确认是否共享屏幕。远程点击不会自动开启。"))
                 .setPriority(Notification.PRIORITY_HIGH)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setDefaults(Notification.DEFAULT_ALL)

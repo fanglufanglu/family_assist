@@ -534,7 +534,8 @@ function serializeFamily(family) {
       ? family.pendingHelpInvitation
       : null,
     pendingFamilyAssistRequest: family.pendingFamilyAssistRequest
-      && family.pendingFamilyAssistRequest.status === "pending"
+      && (family.pendingFamilyAssistRequest.status === "pending"
+        || family.pendingFamilyAssistRequest.status === "accepted")
       && Date.now() <= Number(family.pendingFamilyAssistRequest.expiresAt || 0)
       ? family.pendingFamilyAssistRequest
       : null,
@@ -571,7 +572,8 @@ function hydrateFamily(raw) {
     family.pendingHelpInvitation = null;
   }
   if (family.pendingFamilyAssistRequest
-      && (family.pendingFamilyAssistRequest.status !== "pending"
+      && ((family.pendingFamilyAssistRequest.status !== "pending"
+        && family.pendingFamilyAssistRequest.status !== "accepted")
         || Date.now() > Number(family.pendingFamilyAssistRequest.expiresAt || 0))) {
     family.pendingFamilyAssistRequest = null;
   }
@@ -1009,6 +1011,7 @@ const server = http.createServer(async (req, res) => {
         inviteExpiresAt: family.inviteExpiresAt,
         authToken: elderToken,
         familyMemberCount: familyMembers(family).length,
+        familyMembers: publicFamily(family, family.members.get(elderToken), elderToken).familyMembers,
       });
       return;
     }
@@ -1323,6 +1326,63 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/help/family-request/cancel") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const requestId = String(payload.requestId || "").trim();
+      const result = requireMember(res, pairCode, authToken, "family");
+      if (!result) return;
+      const request = result.family.pendingFamilyAssistRequest;
+      const currentRef = memberReference(authToken, result.member);
+      if (!request || request.id !== requestId || request.helperRef !== currentRef) {
+        sendJson(res, 404, { error: "family assist request not found" });
+        return;
+      }
+      if (request.status !== "pending") {
+        sendJson(res, 409, { error: "family assist request already handled" });
+        return;
+      }
+      request.status = "cancelled";
+      request.updatedAt = new Date().toISOString();
+      result.family.updatedAt = request.updatedAt;
+      audit(result.family, "family_assist_request_cancelled", { requestId });
+      sendJson(res, 200, { ok: true, request: publicFamilyAssistRequest(result.family, result.member, authToken) });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/help/family-request/withdraw") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const requestId = String(payload.requestId || "").trim();
+      const result = requireMember(res, pairCode, authToken, "elder");
+      if (!result) return;
+      const request = result.family.pendingFamilyAssistRequest;
+      if (!request || request.id !== requestId) {
+        sendJson(res, 404, { error: "family assist request not found" });
+        return;
+      }
+      if (request.status !== "accepted") {
+        sendJson(res, 409, { error: "family assist request already handled" });
+        return;
+      }
+      request.status = "cancelled";
+      request.updatedAt = new Date().toISOString();
+      const invitation = result.family.pendingHelpInvitation;
+      if (invitation && invitation.id === requestId && invitation.status === "accepted") {
+        invitation.status = "cancelled";
+        invitation.updatedAt = request.updatedAt;
+      }
+      result.family.updatedAt = request.updatedAt;
+      audit(result.family, "family_assist_request_withdrawn", {
+        requestId,
+        helperName: request.helperName,
+      });
+      sendJson(res, 200, { ok: true, request: publicFamilyAssistRequest(result.family, result.member, authToken) });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/help/invite") {
       const payload = JSON.parse((await readBody(req)).toString("utf8"));
       const pairCode = String(payload.pairCode || "").trim();
@@ -1332,6 +1392,20 @@ const server = http.createServer(async (req, res) => {
       if (!result) return;
       if (result.family.active) {
         sendJson(res, 409, { error: "assist session is active" });
+        return;
+      }
+      const existingInvitation = result.family.pendingHelpInvitation;
+      if (existingInvitation
+          && (existingInvitation.status === "pending" || existingInvitation.status === "accepted")
+          && Date.now() <= Number(existingInvitation.expiresAt || 0)) {
+        if (existingInvitation.targetHelperRef !== targetHelperRef) {
+          sendJson(res, 409, { error: "another help invitation is pending" });
+          return;
+        }
+        sendJson(res, 200, {
+          ok: true,
+          invitation: publicHelpInvitation(result.family, result.member, authToken),
+        });
         return;
       }
       const target = familyMembers(result.family)
@@ -1408,6 +1482,30 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         invitation: publicHelpInvitation(result.family, result.member, authToken),
       });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/help/invite/cancel") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const invitationId = String(payload.invitationId || "").trim();
+      const result = requireMember(res, pairCode, authToken, "elder");
+      if (!result) return;
+      const invitation = result.family.pendingHelpInvitation;
+      if (!invitation || invitation.id !== invitationId) {
+        sendJson(res, 404, { error: "help invitation not found" });
+        return;
+      }
+      if (invitation.status !== "pending" && invitation.status !== "accepted") {
+        sendJson(res, 409, { error: "help invitation already handled" });
+        return;
+      }
+      invitation.status = "cancelled";
+      invitation.updatedAt = new Date().toISOString();
+      result.family.updatedAt = invitation.updatedAt;
+      audit(result.family, "help_invite_cancelled", { invitationId });
+      sendJson(res, 200, { ok: true, invitation: publicHelpInvitation(result.family, result.member, authToken) });
       return;
     }
 

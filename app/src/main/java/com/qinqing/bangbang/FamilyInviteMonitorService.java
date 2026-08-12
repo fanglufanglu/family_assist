@@ -43,17 +43,13 @@ public class FamilyInviteMonitorService extends Service {
     public void onCreate() {
         super.onCreate();
         createChannel();
-        Notification notification = buildForegroundNotification();
-        if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
-        } else {
-            startForeground(NOTIFICATION_ID, notification);
-        }
+        promoteToForeground();
         main.post(pollLoop);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        promoteToForeground();
         return START_STICKY;
     }
 
@@ -78,7 +74,6 @@ public class FamilyInviteMonitorService extends Service {
         String baseUrl = prefs.getString("baseUrl", "");
         if (!("family".equals(role) || "elder".equals(role))
                 || pairCode.isEmpty() || authToken.isEmpty() || baseUrl.isEmpty()) {
-            stopSelf();
             return;
         }
         polling = true;
@@ -119,6 +114,15 @@ public class FamilyInviteMonitorService extends Service {
         channel.setDescription("保持家人求助提醒可及时送达");
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager != null) manager.createNotificationChannel(channel);
+    }
+
+    private void promoteToForeground() {
+        Notification notification = buildForegroundNotification();
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
+        } else {
+            startForeground(NOTIFICATION_ID, notification);
+        }
     }
 
     private Notification buildForegroundNotification() {

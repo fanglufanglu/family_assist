@@ -173,6 +173,7 @@ public class MainActivity extends Activity {
     private LinearLayout familyWaitingView;
     private TextView familyWaitingTitle;
     private TextView familyWaitingCaption;
+    private Button familyWaitingActionButton;
     private Button familyChangeBindingButton;
     private volatile boolean rtcVideoReady;
     private boolean rtcTrackAttached;
@@ -187,10 +188,13 @@ public class MainActivity extends Activity {
     private String pendingTargetHelperRef = "";
     private String pendingTargetHelperName = "";
     private String pendingHelpInvitationId = "";
+    private String pendingFamilyAssistRequestId = "";
+    private long pendingFamilyAssistRequestExpiresAt;
     private Button selectedFamilyHelpButton;
     private boolean familyHelpInvitePromptShowing;
     private String respondingFamilyHelpInvitationId = "";
     private boolean elderFamilyAssistPromptShowing;
+    private String respondingElderFamilyAssistRequestId = "";
     private boolean captureRequestInProgress;
     private boolean resumeCaptureAfterNotificationPermission;
     private boolean resumeCaptureAfterNotificationSettings;
@@ -415,12 +419,17 @@ public class MainActivity extends Activity {
                 setStatus("求助已发出，家人正在连接。需要结束时点“结束本次求助”。");
             });
         } else if (requestCode == REQUEST_CAPTURE) {
+            String cancelledFamilyRequestId = pendingHelpInvitationId;
             pendingTargetHelperRef = "";
             pendingTargetHelperName = "";
             pendingHelpInvitationId = "";
             selectedFamilyHelpButton = null;
             prefs.edit().putBoolean("assistActive", false).apply();
-            endHelpRequest();
+            if (cancelledFamilyRequestId != null && !cancelledFamilyRequestId.isEmpty()) {
+                withdrawAcceptedFamilyAssistRequest(cancelledFamilyRequestId);
+            } else {
+                endHelpRequest();
+            }
             showElder();
             setStatus("你取消了屏幕共享授权。");
         }
@@ -613,15 +622,18 @@ public class MainActivity extends Activity {
 
         TextView accountButton = settingsRow("退出登录", "退出当前设备，不会删除亲属关系");
         boolean elderMode = "elder".equals(selectedAppRole);
-        TextView relativesButton = settingsRow(elderMode ? "家属管理" : "长辈管理",
-                elderMode ? "查看、邀请和管理可信家属" : "查看、添加和管理已绑定长辈");
+        TextView relativesButton = settingsRow("家人管理",
+                elderMode ? "查看和邀请可信家人" : "查看和管理已绑定长辈");
         TextView roleButton = settingsRow("使用身份", "当前为" + roleDisplayName(selectedAppRole) + "，身份跟随账号保存");
         TextView safetyButton = settingsRow("安全与权限", "管理画圈、敏感保护和远程操作");
         TextView privacyButton = settingsRow("隐私政策", "了解信息如何被使用和保护");
         TextView deleteButton = settingsRow("注销账号", "永久删除账号和相关绑定");
 
         accountButton.setOnClickListener(v -> confirmLogout());
-        relativesButton.setOnClickListener(v -> showRelativesManagement());
+        relativesButton.setOnClickListener(v -> {
+            if (elderMode) showElderFamilyMembers();
+            else showRelativesManagement();
+        });
         roleButton.setOnClickListener(v -> showRoleSwitchGuide());
         safetyButton.setOnClickListener(v -> {
             if (isBoundAs("elder")) {
@@ -1088,7 +1100,7 @@ public class MainActivity extends Activity {
 
         if (!isBoundAs("elder")) {
             EditText nameInput = input("长辈名称，例如 妈妈", displayName);
-            Button inviteButton = primaryButton("生成家人绑定码");
+            Button inviteButton = primaryButton("生成邀请绑定码");
             inviteButton.setOnClickListener(v -> {
                 displayName = nameInput.getText().toString().trim();
                 if (displayName.isEmpty()) {
@@ -1098,7 +1110,7 @@ public class MainActivity extends Activity {
                 createInvite(inviteButton);
             });
 
-            LinearLayout bindCard = card("添加家人", "生成 6 位绑定码，让家人在手机上输入。");
+            LinearLayout bindCard = card("邀请家人", "生成 6 位绑定码，让家人在手机上申请绑定。");
             bindCard.addView(label("我的称呼"));
             bindCard.addView(nameInput);
             bindCard.addView(inviteButton);
@@ -1139,6 +1151,10 @@ public class MainActivity extends Activity {
             root.addView(stepsCard);
             root.addView(status);
         }
+        LinearLayout safetySummary = card("当前状态", "正在确认家人连接状态...");
+        TextView safetySummaryText = (TextView) safetySummary.getChildAt(1);
+        root.addView(safetySummary);
+        loadElderHomeSummary(safetySummaryText, assisting);
         root.addView(bottomNav("elder"));
         setContentView(scroll(root));
         pollElderAnnotationLoop();
@@ -1156,7 +1172,7 @@ public class MainActivity extends Activity {
         elderBindPolling = true;
         elderScreenVisible = true;
         root = verticalRoot();
-        root.addView(compactPageTitle("添加家人"));
+        root.addView(compactPageTitle("邀请家人"));
         status = notice("");
         status.setVisibility(View.GONE);
 
@@ -1170,7 +1186,7 @@ public class MainActivity extends Activity {
         regenerateButton.setOnClickListener(v -> createInvite(regenerateButton));
         cancelButton.setOnClickListener(v -> cancelInviteWait(cancelButton));
 
-        LinearLayout bindCard = card("家人绑定码", "10 分钟内有效，把这个绑定码告诉家人。");
+        LinearLayout bindCard = card("邀请绑定码", "10 分钟内有效，把这个绑定码告诉家人。");
         bindCard.addView(codeView);
         bindCard.addView(regenerateButton);
         bindCard.addView(cancelButton);
@@ -1181,7 +1197,42 @@ public class MainActivity extends Activity {
         pollElderBindLoop();
     }
 
-    private void showElderBoundSuccess(int familyCount, boolean invitePending) {
+    private void loadElderHomeSummary(TextView target, boolean assisting) {
+        statusIo.execute(() -> {
+            try {
+                JSONObject result = NetworkClient.getJson(baseUrl,
+                        "/api/bind/status?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
+                JSONObject family = result.optJSONObject("family");
+                JSONArray members = family == null ? null : family.optJSONArray("familyMembers");
+                StringBuilder names = new StringBuilder();
+                if (members != null) {
+                    for (int index = 0; index < members.length(); index++) {
+                        JSONObject member = members.optJSONObject(index);
+                        if (member == null) continue;
+                        if (names.length() > 0) names.append("、");
+                        names.append(member.optString("name", "家人"));
+                    }
+                }
+                String connected = names.length() == 0 ? "暂无" : names.toString();
+                boolean remoteAllowed = family != null && family.optBoolean("controlAllowed", false);
+                String summary = "已连接家人：" + connected
+                        + "\n屏幕共享：" + (assisting ? "已开启" : "未开始")
+                        + "\n远程点击：" + (assisting && remoteAllowed ? "本次已允许" : "未允许");
+                main.post(() -> {
+                    if ("elder".equals(currentPage) && target != null) target.setText(summary);
+                });
+            } catch (Exception ignored) {
+                main.post(() -> {
+                    if ("elder".equals(currentPage) && target != null) {
+                        target.setText("已连接家人：待刷新\n屏幕共享："
+                                + (assisting ? "已开启" : "未开始") + "\n远程点击：未允许");
+                    }
+                });
+            }
+        });
+    }
+
+    private void showElderBoundSuccess(int familyCount, boolean invitePending, JSONObject addedMember) {
         currentPage = "elderBound";
         prefs.edit().putBoolean("elderPageVisible", false).apply();
         elderBindPolling = false;
@@ -1193,7 +1244,10 @@ public class MainActivity extends Activity {
 
         elderInviteBaselineFamilyCount = familyCount;
         prefs.edit().putInt("pendingInviteFamilyCount", familyCount).apply();
-        LinearLayout successCard = card("添加成功", "需要帮助时，可以直接请这位家人接入。");
+        String addedName = addedMember == null ? "新家人" : addedMember.optString("name", "新家人");
+        String addedPhone = addedMember == null ? "" : addedMember.optString("phone", "");
+        String addedLabel = addedPhone.isEmpty() ? addedName : addedName + "（" + addedPhone + "）";
+        LinearLayout successCard = card("已添加 " + addedLabel, "需要帮助时，可以直接请这位家人接入。");
         Button prepareButton = primaryButton("返回家人列表");
         prepareButton.setOnClickListener(v -> finishAddingFamily(prepareButton));
         successCard.addView(prepareButton);
@@ -1309,28 +1363,23 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         elderBindPolling = false;
         root = verticalRoot();
-        root.addView(compactPageTitle("elder".equals(selectedAppRole) ? "家属管理" : "我的长辈"));
+        if ("elder".equals(selectedAppRole)) {
+            showElderFamilyMembers();
+            return;
+        }
+        root.addView(compactPageTitle("我的家人"));
         status = notice("");
         status.setVisibility(View.GONE);
 
-        if ("elder".equals(selectedAppRole)) {
-            root.addView(card("绑定保护", "新家属输入绑定码后，需要你在本机确认才能加入。"));
-            Button inviteButton = primaryButton("邀请更多家属");
-            inviteButton.setOnClickListener(v -> createInvite(inviteButton));
-            LinearLayout actionCard = card("家属管理", "最多可绑定 5 位可信家属");
-            actionCard.addView(inviteButton);
-            root.addView(actionCard);
-        } else {
-            LinearLayout elderList = new LinearLayout(this);
-            elderList.setOrientation(LinearLayout.VERTICAL);
-            elderList.setLayoutParams(fullWidthParams());
-            elderList.addView(card("正在加载", "正在获取已添加的长辈..."));
-            root.addView(elderList);
-            Button familyBindButton = familySecondaryButton("添加长辈");
-            familyBindButton.setOnClickListener(v -> showFamilyBind());
-            root.addView(familyBindButton);
-            loadFamilyElderMemberships(elderList);
-        }
+        LinearLayout elderList = new LinearLayout(this);
+        elderList.setOrientation(LinearLayout.VERTICAL);
+        elderList.setLayoutParams(fullWidthParams());
+        elderList.addView(card("正在加载", "正在获取已添加的长辈..."));
+        root.addView(elderList);
+        Button familyBindButton = familySecondaryButton("添加长辈");
+        familyBindButton.setOnClickListener(v -> showFamilyBind());
+        root.addView(familyBindButton);
+        loadFamilyElderMemberships(elderList);
         root.addView(status);
         root.addView(bottomNav("relatives"));
         setContentView(scroll(root));
@@ -1390,9 +1439,9 @@ public class MainActivity extends Activity {
             JSONObject request = familyState == null ? null : familyState.optJSONObject("familyAssistRequest");
             String requestState = request == null ? "" : request.optString("status", "");
             LinearLayout elderCard = card(elderName, active ? "协助进行中" : "已安全绑定");
-            Button assistButton = familyPrimaryButton("请求为" + elderName + "提供协助");
+            Button assistButton = familyPrimaryButton("请求协助");
             if (active && helperIsCurrent) {
-                assistButton.setText("继续协助" + elderName);
+                assistButton.setText("继续协助");
                 assistButton.setOnClickListener(v -> openFamilyMembership(membership));
             } else if (active) {
                 setButtonDisabled(assistButton, "其他家属正在协助");
@@ -1416,13 +1465,17 @@ public class MainActivity extends Activity {
         setButtonBusy(sourceButton, "正在询问" + elderName + "...");
         statusIo.execute(() -> {
             try {
-                NetworkClient.postJson(baseUrl, "/api/help/family-request", new JSONObject()
+                JSONObject result = NetworkClient.postJson(baseUrl, "/api/help/family-request", new JSONObject()
                         .put("pairCode", selectedPair)
                         .put("authToken", selectedToken));
+                JSONObject request = result.optJSONObject("request");
+                pendingFamilyAssistRequestId = request == null ? "" : request.optString("id", "");
+                pendingFamilyAssistRequestExpiresAt = request == null ? 0L : request.optLong("expiresAt", 0L);
                 main.post(() -> {
                     selectFamilyMembership(membership);
                     showFamily();
-                    updateFamilyWaiting("已请求协助" + elderName, "等待长辈确认。对方同意并开启屏幕共享后，画面会自动显示。 ");
+                    updateFamilyWaiting("等待" + elderName + "确认", "请求 10 分钟内有效。对方同意并共享屏幕后，画面会自动显示。");
+                    showFamilyWaitingCancelAction();
                 });
             } catch (Exception error) {
                 main.post(() -> {
@@ -1472,6 +1525,7 @@ public class MainActivity extends Activity {
         elderAnnotationPolling = false;
         elderBindPolling = false;
         main.removeCallbacks(familyBindPendingLoopRunnable);
+        stopService(new Intent(this, FamilyInviteMonitorService.class));
         stopFamilyWebRtc();
         accountToken = "";
         accountPhone = "";
@@ -1489,6 +1543,7 @@ public class MainActivity extends Activity {
                 .remove(PREF_ASSIST_SESSION_ID)
                 .remove("pendingInviteCode")
                 .remove("pendingInviteFamilyCount")
+                .remove("pendingInviteMembers")
                 .remove("pendingBindToken")
                 .remove("pendingBindPairCode")
                 .putBoolean("familyBound", false)
@@ -1540,7 +1595,7 @@ public class MainActivity extends Activity {
         familyControlRequestButton = familySecondaryButton("申请远程操作");
         familyRemoteButton = controlPrimaryButton("远程操作");
         familyEndButton = dangerButton("结束本次协助");
-        familyChangeBindingButton = familySecondaryButton("选择长辈");
+        familyChangeBindingButton = familySecondaryButton("选择家人");
         familyControlRequestButton.setOnClickListener(v -> requestRemoteControl(familyControlRequestButton));
         familyRemoteButton.setOnClickListener(v -> showRemoteControlPanel());
         familyEndButton.setOnClickListener(v -> endFamilyAssistView());
@@ -1550,6 +1605,9 @@ public class MainActivity extends Activity {
         familyWaitingView = card("暂时没有新的求助", "收到长辈求助后，屏幕会自动显示。");
         familyWaitingTitle = (TextView) familyWaitingView.getChildAt(0);
         familyWaitingCaption = (TextView) familyWaitingView.getChildAt(1);
+        familyWaitingActionButton = familySecondaryButton("查看家人");
+        familyWaitingActionButton.setOnClickListener(v -> showRelativesManagement());
+        familyWaitingView.addView(familyWaitingActionButton);
         familyScreenLabelView = screenLabel("长辈的屏幕");
         familyScreenLabelView.setTextColor(COLOR_FAMILY);
         familyScreenSurface = screenSurface(screenView);
@@ -1592,9 +1650,11 @@ public class MainActivity extends Activity {
         root.addView(list);
         root.addView(status);
 
-        elderAddFamilyButton = secondaryButton("添加家人");
+        elderAddFamilyButton = secondaryButton("邀请新家人");
         elderAddFamilyButton.setOnClickListener(v -> createInvite(elderAddFamilyButton));
-        elderAddFamilyButton.setVisibility(prefs.getBoolean("assistActive", false) ? View.GONE : View.VISIBLE);
+        if (prefs.getBoolean("assistActive", false)) {
+            setButtonDisabled(elderAddFamilyButton, "结束求助后可邀请");
+        }
         root.addView(elderAddFamilyButton);
         root.addView(bottomNav("family"));
         setContentView(scroll(root));
@@ -1630,12 +1690,19 @@ public class MainActivity extends Activity {
         }
         list.removeAllViews();
         if (members == null || members.length() == 0) {
-            list.addView(card("还没有绑定家属", "添加家属后，就能在这里快速向指定家人求助。"));
+            list.addView(card("还没有家人", "邀请家人完成绑定后，就能在这里快速求助。"));
             return;
         }
         boolean active = family != null && family.optBoolean("active", false);
         if (elderAddFamilyButton != null) {
-            elderAddFamilyButton.setVisibility(active ? View.GONE : View.VISIBLE);
+            elderAddFamilyButton.setVisibility(View.VISIBLE);
+            if (active) {
+                setButtonDisabled(elderAddFamilyButton, "结束求助后可邀请");
+            } else {
+                elderAddFamilyButton.setText("邀请新家人");
+                elderAddFamilyButton.setEnabled(true);
+                elderAddFamilyButton.setAlpha(1f);
+            }
         }
         String activeHelperRef = family == null ? "" : family.optString("activeHelperRef", "");
         String targetHelperRef = family == null ? "" : family.optString("targetHelperRef", "");
@@ -1663,7 +1730,8 @@ public class MainActivity extends Activity {
             } else if (anotherHelperActive) {
                 setButtonDisabled(helpButton, "已有家属正在协助");
             } else if (thisInvitationWaiting) {
-                setButtonDisabled(helpButton, "等待" + name + "接入");
+                helpButton.setText("取消邀请");
+                helpButton.setOnClickListener(v -> cancelSelectedFamilyHelp(invitation.optString("id", ""), name, helpButton));
             } else if (invitationWaiting) {
                 setButtonDisabled(helpButton, "已邀请其他家属");
             } else {
@@ -1694,13 +1762,28 @@ public class MainActivity extends Activity {
                 main.post(() -> {
                     setStatus("已提醒" + memberName + "，等待对方接受。");
                     if (selectedFamilyHelpButton != null) {
-                        selectedFamilyHelpButton.setText("等待" + memberName + "接受...");
+                        selectedFamilyHelpButton.setEnabled(true);
+                        selectedFamilyHelpButton.setAlpha(1f);
+                        selectedFamilyHelpButton.setText("取消邀请");
+                        selectedFamilyHelpButton.setOnClickListener(v -> cancelSelectedFamilyHelp(
+                                pendingHelpInvitationId, memberName, selectedFamilyHelpButton));
                     }
                     main.removeCallbacks(selectedHelpInvitePollLoop);
                     main.post(selectedHelpInvitePollLoop);
                 });
             } catch (Exception e) {
-                main.post(() -> finishSelectedHelpInvitation("没有通知成功，请稍后重试。"));
+                main.post(() -> {
+                    String raw = String.valueOf(e.getMessage());
+                    if (raw.contains("assist session is active")) {
+                        finishSelectedHelpInvitation("已有家人正在协助，请先结束当前求助。");
+                    } else if (raw.contains("another help invitation is pending")) {
+                        finishSelectedHelpInvitation("已经邀请了另一位家人，请先取消后再选择。");
+                    } else if (raw.contains("family member not found")) {
+                        finishSelectedHelpInvitation("这位家人的绑定已失效，请刷新家人列表。");
+                    } else {
+                        finishSelectedHelpInvitation("网络暂时不可用，请检查后重试。");
+                    }
+                });
             }
         });
     }
@@ -1742,6 +1825,37 @@ public class MainActivity extends Activity {
         restoreButton(selectedFamilyHelpButton);
         selectedFamilyHelpButton = null;
         setStatus(message);
+    }
+
+    private void cancelSelectedFamilyHelp(String invitationId, String memberName, Button sourceButton) {
+        if (invitationId == null || invitationId.isEmpty()) {
+            finishSelectedHelpInvitation("这次邀请已结束，可以重新选择家人。");
+            showElderFamilyMembers();
+            return;
+        }
+        setButtonBusy(sourceButton, "正在取消...");
+        statusIo.execute(() -> {
+            try {
+                NetworkClient.postJson(baseUrl, "/api/help/invite/cancel", new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken)
+                        .put("invitationId", invitationId));
+                main.post(() -> {
+                    finishSelectedHelpInvitation("已取消对" + memberName + "的邀请。");
+                    showElderFamilyMembers();
+                });
+            } catch (Exception error) {
+                main.post(() -> {
+                    if (isExpiredOrHandledRequest(error)) {
+                        finishSelectedHelpInvitation("这次邀请已经结束，可以重新选择家人。");
+                        showElderFamilyMembers();
+                    } else {
+                        restoreButton(sourceButton);
+                        setStatus("暂时无法取消，请检查网络后重试。");
+                    }
+                });
+            }
+        });
     }
 
     private void startFamilyInviteMonitor() {
@@ -1857,7 +1971,19 @@ public class MainActivity extends Activity {
                             .remove("respondingFamilyHelpInvitationId")
                             .remove("respondingFamilyHelpInvitationAtMs")
                             .apply();
-                    setStatus("回应没有发送成功，请检查网络后重试。");
+                    if (isExpiredOrHandledRequest(e)) {
+                        prefs.edit()
+                                .putString("handledFamilyHelpInvitationId", invitationId)
+                                .remove("pendingFamilyHelpInvitation")
+                                .apply();
+                        new AlertDialog.Builder(this)
+                                .setTitle("请求已结束")
+                                .setMessage("这次求助已过期或已被处理，无需重复操作。")
+                                .setPositiveButton("知道了", (dialog, which) -> showFamily())
+                                .show();
+                    } else {
+                        setStatus("网络暂时不可用，请检查后重试。");
+                    }
                 });
             }
         });
@@ -1878,16 +2004,22 @@ public class MainActivity extends Activity {
                 prefs.edit().remove("pendingFamilyAssistRequest").apply();
                 return;
             }
+            if (requestId.equals(respondingElderFamilyAssistRequestId)
+                    || requestId.equals(prefs.getString("handledElderFamilyAssistRequestId", ""))) {
+                return;
+            }
             elderFamilyAssistPromptShowing = true;
             new AlertDialog.Builder(this)
-                    .setTitle(helperName + "想帮你操作手机")
-                    .setMessage("同意后，系统还会请你确认屏幕共享。只有你完成确认，本次协助才会开始。")
-                    .setPositiveButton("同意并继续", (dialog, which) -> {
+                    .setTitle("第 1/2 步 · " + helperName + " 请求协助")
+                    .setMessage("同意后将进入第 2 步，由系统确认是否共享屏幕。远程点击不会自动开启，需要时会另行征得你的同意。")
+                    .setPositiveButton("下一步：确认屏幕共享", (dialog, which) -> {
                         elderFamilyAssistPromptShowing = false;
+                        markElderFamilyAssistRequestResponding(requestId);
                         respondToElderFamilyAssistRequest(requestId, helperName, true);
                     })
                     .setNegativeButton("现在不需要", (dialog, which) -> {
                         elderFamilyAssistPromptShowing = false;
+                        markElderFamilyAssistRequestResponding(requestId);
                         respondToElderFamilyAssistRequest(requestId, helperName, false);
                     })
                     .setOnCancelListener(dialog -> elderFamilyAssistPromptShowing = false)
@@ -1895,6 +2027,12 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {
             prefs.edit().remove("pendingFamilyAssistRequest").apply();
         }
+    }
+
+    private void markElderFamilyAssistRequestResponding(String requestId) {
+        respondingElderFamilyAssistRequestId = requestId;
+        prefs.edit().remove("pendingFamilyAssistRequest").commit();
+        AssistNotifier.cancelFamilyAssistRequestNotification(this);
     }
 
     private void respondToElderFamilyAssistRequest(String requestId, String helperName, boolean accepted) {
@@ -1907,6 +2045,8 @@ public class MainActivity extends Activity {
                         .put("authToken", authToken)
                         .put("requestId", requestId)
                         .put("accepted", accepted));
+                respondingElderFamilyAssistRequestId = "";
+                prefs.edit().putString("handledElderFamilyAssistRequestId", requestId).apply();
                 if (!accepted) {
                     main.post(() -> {
                         if (!"elder".equals(currentPage)) showElder();
@@ -1924,9 +2064,39 @@ public class MainActivity extends Activity {
                     requestHelpAndCapture();
                 });
             } catch (Exception error) {
-                main.post(() -> setStatus("回应没有发送成功，请稍后重试。"));
+                main.post(() -> handleElderAssistResponseError(error, helperName));
             }
         });
+    }
+
+    private void handleElderAssistResponseError(Exception error, String helperName) {
+        respondingElderFamilyAssistRequestId = "";
+        prefs.edit().remove("pendingFamilyAssistRequest").apply();
+        AssistNotifier.cancelFamilyAssistRequestNotification(this);
+        String raw = error == null ? "" : String.valueOf(error.getMessage());
+        String title;
+        String message;
+        if (raw.contains("expired") || raw.contains("not found") || raw.contains("already handled")) {
+            title = "请求已结束";
+            message = "这次协助请求已过期或已处理，请让" + helperName + "重新发起。";
+        } else if (raw.contains("assist session is active")) {
+            title = "已有家人正在协助";
+            message = "请先结束当前求助，再接受新的请求。";
+        } else {
+            prefs.edit().remove("handledElderFamilyAssistRequestId").apply();
+            setStatus("网络暂时不可用，请检查后重试。");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("知道了", (dialog, which) -> showElder())
+                .show();
+    }
+
+    private boolean isExpiredOrHandledRequest(Exception error) {
+        String raw = error == null ? "" : String.valueOf(error.getMessage());
+        return raw.contains("expired") || raw.contains("not found") || raw.contains("already handled");
     }
 
     private View buildFrameView() {
@@ -2040,7 +2210,7 @@ public class MainActivity extends Activity {
 
     private void showFamilyMoreMenu(View anchor) {
         PopupMenu menu = new PopupMenu(this, anchor);
-        menu.getMenu().add("查看我的长辈");
+        menu.getMenu().add("查看我的家人");
         if (familyLastActive) {
             menu.getMenu().add("结束本次协助");
         }
@@ -2657,7 +2827,6 @@ public class MainActivity extends Activity {
     }
 
     private void clearLocalMembershipForAccountChange() {
-        stopService(new Intent(this, FamilyInviteMonitorService.class));
         authToken = "";
         memberRole = "";
         pairCode = "";
@@ -2668,6 +2837,7 @@ public class MainActivity extends Activity {
                 .remove(PREF_ASSIST_SESSION_ID)
                 .remove("pendingInviteCode")
                 .remove("pendingInviteFamilyCount")
+                .remove("pendingInviteMembers")
                 .remove("pendingBindToken")
                 .remove("pendingBindPairCode")
                 .putBoolean("familyBound", false)
@@ -2729,7 +2899,7 @@ public class MainActivity extends Activity {
         inviteInProgress = true;
         ensureElderPairCode();
         setButtonBusy(sourceButton, "生成中...");
-        setStatus("正在生成亲属绑定码...");
+        setStatus("正在生成邀请绑定码...");
         statusIo.execute(() -> {
             try {
                 JSONObject payload = new JSONObject()
@@ -2744,12 +2914,14 @@ public class MainActivity extends Activity {
                 memberRole = "elder";
                 String inviteCode = result.optString("inviteCode", "");
                 int familyMemberCount = result.optInt("familyMemberCount", 0);
+                JSONArray baselineMembers = result.optJSONArray("familyMembers");
                 elderInviteBaselineFamilyCount = familyMemberCount;
                 prefs.edit()
                         .putString("authToken", authToken)
                         .putString("memberRole", memberRole)
                         .putString("pendingInviteCode", inviteCode)
                         .putInt("pendingInviteFamilyCount", familyMemberCount)
+                        .putString("pendingInviteMembers", baselineMembers == null ? "[]" : baselineMembers.toString())
                         .remove("lastBindApprovalPromptId")
                         .putBoolean("familyBound", familyMemberCount > 0)
                         .apply();
@@ -2835,7 +3007,10 @@ public class MainActivity extends Activity {
                 JSONObject family = result.optJSONObject("family");
                 int familyCount = boundFamilyCount(family);
                 prefs.edit().remove("pendingInviteCode").putBoolean("familyBound", familyCount > 0).apply();
-                prefs.edit().remove("pendingInviteFamilyCount").apply();
+                prefs.edit()
+                        .remove("pendingInviteFamilyCount")
+                        .remove("pendingInviteMembers")
+                        .apply();
                 main.post(() -> {
                     if (familyCount > 0) {
                         showElder();
@@ -2860,6 +3035,7 @@ public class MainActivity extends Activity {
             prefs.edit()
                     .remove("pendingInviteCode")
                     .remove("pendingInviteFamilyCount")
+                    .remove("pendingInviteMembers")
                     .apply();
             showElderFamilyMembers();
             return;
@@ -2874,6 +3050,7 @@ public class MainActivity extends Activity {
                 prefs.edit()
                         .remove("pendingInviteCode")
                         .remove("pendingInviteFamilyCount")
+                        .remove("pendingInviteMembers")
                         .apply();
                 main.post(this::showElderFamilyMembers);
             } catch (Exception e) {
@@ -3161,6 +3338,7 @@ public class MainActivity extends Activity {
     private void setFamilySessionActive(boolean active) {
         if (active) {
             updateFamilyWaiting("正在连接屏幕", "画面出现后即可帮助长辈。");
+            if (familyWaitingActionButton != null) familyWaitingActionButton.setVisibility(View.GONE);
             if (!familyMediaReady && familyScreenSurface != null) {
                 resizeFamilyScreenSurface(dp(2));
             }
@@ -3168,6 +3346,7 @@ public class MainActivity extends Activity {
             closeFamilyFullscreen();
             familyMediaReady = false;
             updateFamilyWaiting("暂时没有新的求助", "收到长辈求助后，屏幕会自动显示。");
+            showFamilyWaitingBrowseAction();
             updateFamilyControlButton(false, false);
             resizeFamilyScreenSurface(dp(500));
         }
@@ -3183,6 +3362,78 @@ public class MainActivity extends Activity {
     private void updateFamilyWaiting(String titleText, String captionText) {
         if (familyWaitingTitle != null) familyWaitingTitle.setText(titleText);
         if (familyWaitingCaption != null) familyWaitingCaption.setText(captionText);
+    }
+
+    private void showFamilyWaitingCancelAction() {
+        if (familyWaitingActionButton == null) return;
+        familyWaitingActionButton.setVisibility(View.VISIBLE);
+        familyWaitingActionButton.setText("取消本次请求");
+        familyWaitingActionButton.setEnabled(true);
+        familyWaitingActionButton.setAlpha(1f);
+        familyWaitingActionButton.setOnClickListener(v -> cancelFamilyAssistRequest(familyWaitingActionButton));
+        if (familyChangeBindingButton != null) familyChangeBindingButton.setVisibility(View.GONE);
+    }
+
+    private void showFamilyWaitingRetryAction() {
+        if (familyWaitingActionButton == null) return;
+        familyWaitingActionButton.setVisibility(View.VISIBLE);
+        familyWaitingActionButton.setText("重新选择家人");
+        familyWaitingActionButton.setEnabled(true);
+        familyWaitingActionButton.setAlpha(1f);
+        familyWaitingActionButton.setOnClickListener(v -> showRelativesManagement());
+        if (familyChangeBindingButton != null) familyChangeBindingButton.setVisibility(View.GONE);
+    }
+
+    private void showFamilyWaitingBrowseAction() {
+        pendingFamilyAssistRequestId = "";
+        pendingFamilyAssistRequestExpiresAt = 0L;
+        if (familyWaitingActionButton == null) return;
+        familyWaitingActionButton.setVisibility(View.GONE);
+        if (familyChangeBindingButton != null) familyChangeBindingButton.setVisibility(View.VISIBLE);
+    }
+
+    private void cancelFamilyAssistRequest(Button sourceButton) {
+        final String requestId = pendingFamilyAssistRequestId;
+        if (requestId.isEmpty()) {
+            showRelativesManagement();
+            return;
+        }
+        setButtonBusy(sourceButton, "正在取消...");
+        statusIo.execute(() -> {
+            try {
+                NetworkClient.postJson(baseUrl, "/api/help/family-request/cancel", new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken)
+                        .put("requestId", requestId));
+                main.post(() -> {
+                    updateFamilyWaiting("请求已取消", "可以从“家人”页面选择长辈重新发起。");
+                    showFamilyWaitingRetryAction();
+                });
+            } catch (Exception error) {
+                main.post(() -> {
+                    if (isExpiredOrHandledRequest(error)) {
+                        updateFamilyWaiting("请求已结束", "这次请求已过期或已处理，可以重新发起。");
+                        showFamilyWaitingRetryAction();
+                    } else {
+                        restoreButton(sourceButton);
+                        setStatus("暂时无法取消，请检查网络后重试。");
+                    }
+                });
+            }
+        });
+    }
+
+    private void withdrawAcceptedFamilyAssistRequest(String requestId) {
+        statusIo.execute(() -> {
+            try {
+                NetworkClient.postJson(baseUrl, "/api/help/family-request/withdraw", new JSONObject()
+                        .put("pairCode", pairCode)
+                        .put("authToken", authToken)
+                        .put("requestId", requestId));
+            } catch (Exception ignored) {
+                // The accepted request also expires server-side; the local screen-sharing state is already cleared.
+            }
+        });
     }
 
     private void showFamilyMedia(View mediaView, String stateText) {
@@ -3263,6 +3514,10 @@ public class MainActivity extends Activity {
                         ? "" : familyAssistRequest.optString("status", "");
                 String requestedElderName = familyAssistRequest == null
                         ? "长辈" : familyAssistRequest.optString("elderName", "长辈");
+                String familyAssistRequestId = familyAssistRequest == null
+                        ? "" : familyAssistRequest.optString("id", "");
+                long familyAssistExpiresAt = familyAssistRequest == null
+                        ? 0L : familyAssistRequest.optLong("expiresAt", 0L);
                     if (!active) {
                     main.post(() -> {
                         familyLastSessionId = "";
@@ -3272,18 +3527,28 @@ public class MainActivity extends Activity {
                         if ("accepted".equals(helpInvitationState)) {
                             updateFamilyWaiting("已接受求助", "正在等待" + invitedElderName + "确认屏幕共享。 ");
                         } else if ("pending".equals(familyAssistRequestState)) {
-                            updateFamilyWaiting("已请求协助" + requestedElderName,
-                                    "等待长辈确认。对方同意后，会继续开启屏幕共享。 ");
+                            pendingFamilyAssistRequestId = familyAssistRequestId;
+                            pendingFamilyAssistRequestExpiresAt = familyAssistExpiresAt;
+                            updateFamilyWaiting("等待" + requestedElderName + "确认",
+                                    familyAssistRemainingText(familyAssistExpiresAt));
+                            showFamilyWaitingCancelAction();
                         } else if ("accepted".equals(familyAssistRequestState)) {
                             updateFamilyWaiting(requestedElderName + "已同意",
                                     "长辈正在确认屏幕共享，画面稍后会自动显示。 ");
+                            if (familyWaitingActionButton != null) familyWaitingActionButton.setVisibility(View.GONE);
                         } else if ("declined".equals(familyAssistRequestState)) {
                             updateFamilyWaiting(requestedElderName + "暂时不需要协助",
-                                    "你可以稍后从“长辈”页面再次发起请求。 ");
+                                    "可以稍后从“家人”页面再次发起请求。 ");
+                            showFamilyWaitingRetryAction();
+                        } else if ("expired".equals(familyAssistRequestState)
+                                || "cancelled".equals(familyAssistRequestState)) {
+                            updateFamilyWaiting("请求已结束", "可以从“家人”页面重新发起。");
+                            showFamilyWaitingRetryAction();
                         }
                         if (familyPageTitleView != null) familyPageTitleView.setText("协助长辈");
                         if (wasActive) {
-                            updateFamilyWaiting("本次协助已结束", "需要继续时，可在“长辈”页面重新发起。");
+                            updateFamilyWaiting("本次协助已结束", "需要继续时，可在“家人”页面重新发起。");
+                            showFamilyWaitingRetryAction();
                         }
                         setStatus(wasActive
                                 ? "本次协助已结束"
@@ -3366,6 +3631,12 @@ public class MainActivity extends Activity {
                 familyPollInFlight = false;
             }
         });
+    }
+
+    private String familyAssistRemainingText(long expiresAt) {
+        if (expiresAt <= 0L) return "等待长辈确认。对方同意后会继续确认屏幕共享。";
+        long remainingMinutes = Math.max(1L, (expiresAt - System.currentTimeMillis() + 59_999L) / 60_000L);
+        return "等待长辈确认，约 " + remainingMinutes + " 分钟后过期。";
     }
 
     private void requestLatestFrame(String encodedPair, String encodedToken, String frameUpdatedAt) {
@@ -3676,6 +3947,7 @@ public class MainActivity extends Activity {
                 JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
                 JSONObject family = result.optJSONObject("family");
                 int familyCount = boundFamilyCount(family);
+                JSONArray familyMembers = family == null ? null : family.optJSONArray("familyMembers");
                 boolean invitePending = family != null && family.optBoolean("invitePending", false);
                 boolean supportsMultipleFamily = family != null && family.has("familyMemberCount");
                 org.json.JSONArray pendingRequests = family != null ? family.optJSONArray("pendingBindRequests") : null;
@@ -3696,16 +3968,21 @@ public class MainActivity extends Activity {
                 if (familyCount > baselineFamilyCount) {
                     prefs.edit()
                             .putBoolean("familyBound", true)
+                            .putString("pendingInviteMembers",
+                                    familyMembers == null ? "[]" : familyMembers.toString())
                             .apply();
                     if (!elderInviteBoundShown) {
                         elderInviteBoundShown = true;
                         elderBindPolling = false;
-                        main.post(() -> showElderBoundSuccess(familyCount, supportsMultipleFamily && invitePending));
+                        JSONObject addedMember = findAddedFamilyMember(familyMembers);
+                        main.post(() -> showElderBoundSuccess(
+                                familyCount, supportsMultipleFamily && invitePending, addedMember));
                     }
                 } else if (!invitePending) {
                     prefs.edit()
                             .remove("pendingInviteCode")
                             .remove("pendingInviteFamilyCount")
+                            .remove("pendingInviteMembers")
                             .apply();
                     main.post(() -> {
                         elderBindPolling = false;
@@ -3723,6 +4000,28 @@ public class MainActivity extends Activity {
                 main.post(() -> setStatus("网络连接不稳定，正在继续等待家属绑定。"));
             }
         });
+    }
+
+    private JSONObject findAddedFamilyMember(JSONArray members) {
+        if (members == null || members.length() == 0) return null;
+        java.util.HashSet<String> baselineRefs = new java.util.HashSet<>();
+        try {
+            JSONArray baseline = new JSONArray(prefs.getString("pendingInviteMembers", "[]"));
+            for (int index = 0; index < baseline.length(); index++) {
+                JSONObject member = baseline.optJSONObject(index);
+                if (member != null) baselineRefs.add(member.optString("ref", ""));
+            }
+        } catch (Exception ignored) {
+            // A legacy server may not have returned the baseline list.
+        }
+        JSONObject newest = null;
+        for (int index = 0; index < members.length(); index++) {
+            JSONObject member = members.optJSONObject(index);
+            if (member == null) continue;
+            if (!baselineRefs.contains(member.optString("ref", ""))) return member;
+            newest = member;
+        }
+        return newest;
     }
 
     private void showPendingBindApproval(JSONObject pending) {
@@ -3835,6 +4134,7 @@ public class MainActivity extends Activity {
                 .remove(PREF_ASSIST_SESSION_ID)
                 .remove("pendingInviteCode")
                 .remove("pendingInviteFamilyCount")
+                .remove("pendingInviteMembers")
                 .remove("pendingControlRequestAt")
                 .remove("controlSetupRequestAt")
                 .remove("handledControlRequestAt")
@@ -4553,7 +4853,7 @@ public class MainActivity extends Activity {
             addNavItem(nav, R.drawable.ic_nav_family, "家人", "family".equals(current), v -> showElderFamilyMembers());
         } else if ("family".equals(selectedAppRole)) {
             addNavItem(nav, R.drawable.ic_nav_home, "协助", "family".equals(current), v -> showFamily());
-            addNavItem(nav, R.drawable.ic_nav_elder, "长辈", "relatives".equals(current), v -> showRelativesManagement());
+            addNavItem(nav, R.drawable.ic_nav_elder, "家人", "relatives".equals(current), v -> showRelativesManagement());
         }
         addNavItem(nav, R.drawable.ic_nav_profile, "我的", "profile".equals(current), v -> showProfile());
         return nav;

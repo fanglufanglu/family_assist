@@ -128,6 +128,21 @@ async function run() {
     && relativesStatus.body.family.familyMembers[0].name === "女儿"
     && relativesStatus.body.family.familyMembers[0].ref,
   "elder should receive a safe list of bound relatives");
+  assert(Array.isArray(secureInvite.body.familyMembers) && secureInvite.body.familyMembers.length === 0,
+    "new invite should expose the elder's baseline family list");
+  const cancellableHelpInvite = await post("/api/help/invite", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    elderName: "妈妈",
+    targetHelperRef: relativesStatus.body.family.familyMembers[0].ref,
+  });
+  const cancelledHelpInvite = await post("/api/help/invite/cancel", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    invitationId: cancellableHelpInvite.body.invitation.id,
+  });
+  assert(cancelledHelpInvite.status === 200 && cancelledHelpInvite.body.invitation.status === "cancelled",
+    "elder should be able to cancel a pending invitation");
   const secureHelpInvite = await post("/api/help/invite", {
     pairCode: securePairCode,
     authToken: secureInvite.body.authToken,
@@ -148,14 +163,34 @@ async function run() {
     invitationId: secureHelpInvite.body.invitation.id,
     accepted: true,
   });
+  const acceptedInviteCancel = await post("/api/help/invite/cancel", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    invitationId: secureHelpInvite.body.invitation.id,
+  });
+  assert(acceptedInviteCancel.status === 200 && acceptedInviteCancel.body.invitation.status === "cancelled",
+    "elder should be able to cancel after family accepts but before screen sharing starts");
+  const secureHelpInviteAgain = await post("/api/help/invite", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    elderName: "妈妈",
+    targetHelperRef: relativesStatus.body.family.familyMembers[0].ref,
+  });
+  const secureInviteAcceptAgain = await post("/api/help/invite/respond", {
+    pairCode: securePairCode,
+    authToken: pendingDone.body.authToken,
+    invitationId: secureHelpInviteAgain.body.invitation.id,
+    accepted: true,
+  });
   const targetedHelp = await post("/api/help", {
     pairCode: securePairCode,
     authToken: secureInvite.body.authToken,
     elderName: "妈妈",
     targetHelperRef: relativesStatus.body.family.familyMembers[0].ref,
-    helpInvitationId: secureHelpInvite.body.invitation.id,
+    helpInvitationId: secureHelpInviteAgain.body.invitation.id,
   });
-  assert(secureInviteAccept.status === 200 && secureInviteAccept.body.invitation.status === "accepted",
+  assert(secureInviteAccept.status === 200 && secureInviteAccept.body.invitation.status === "accepted"
+      && secureInviteAcceptAgain.status === 200,
     "selected relative must explicitly accept the invitation");
   assert(targetedHelp.status === 200 && targetedHelp.body.family.targetHelperName === "女儿",
     "elder should be able to request a selected relative");
@@ -172,6 +207,36 @@ async function run() {
     authToken: secureInvite.body.authToken,
     sessionId: targetedHelp.body.sessionId,
   });
+  const cancellableFamilyRequest = await post("/api/help/family-request", {
+    pairCode: securePairCode,
+    authToken: pendingDone.body.authToken,
+  });
+  const cancelledFamilyRequest = await post("/api/help/family-request/cancel", {
+    pairCode: securePairCode,
+    authToken: pendingDone.body.authToken,
+    requestId: cancellableFamilyRequest.body.request.id,
+  });
+  assert(cancelledFamilyRequest.status === 200 && cancelledFamilyRequest.body.request.status === "cancelled",
+    "family should be able to cancel a pending assistance request");
+  const withdrawableFamilyRequest = await post("/api/help/family-request", {
+    pairCode: securePairCode,
+    authToken: pendingDone.body.authToken,
+  });
+  const withdrawableFamilyAccept = await post("/api/help/family-request/respond", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    requestId: withdrawableFamilyRequest.body.request.id,
+    accepted: true,
+  });
+  const withdrawnFamilyRequest = await post("/api/help/family-request/withdraw", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    requestId: withdrawableFamilyRequest.body.request.id,
+  });
+  assert(withdrawableFamilyAccept.status === 200
+      && withdrawnFamilyRequest.status === 200
+      && withdrawnFamilyRequest.body.request.status === "cancelled",
+    "elder should be able to cancel after accepting when system screen sharing is declined");
   const familyAssistRequest = await post("/api/help/family-request", {
     pairCode: securePairCode,
     authToken: pendingDone.body.authToken,
