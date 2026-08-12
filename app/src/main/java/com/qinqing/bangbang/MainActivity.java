@@ -333,11 +333,15 @@ public class MainActivity extends Activity {
                 main.postDelayed(() -> showRemoteControlPrompt(pendingControl), 250);
             }
         }
-        if (refreshElderOnResume && elderScreenVisible) {
+        if (refreshElderOnResume) {
             refreshElderOnResume = false;
-            main.postDelayed(this::showElder, 200);
             if (!pendingHelpInvitationId.isEmpty() && !needsOverlayPermission()) {
-                main.postDelayed(this::requestHelpAndCapture, 450);
+                main.postDelayed(() -> {
+                    showElder();
+                    requestHelpAndCapture();
+                }, 250);
+            } else if (elderScreenVisible) {
+                main.postDelayed(this::showElder, 200);
             }
         }
         if (resumeCaptureAfterNotificationSettings && areAssistNotificationsEnabled()) {
@@ -1725,10 +1729,16 @@ public class MainActivity extends Activity {
             boolean thisHelperActive = active && (ref.equals(activeHelperRef) || ref.equals(targetHelperRef));
             boolean anotherHelperActive = active && !thisHelperActive;
             boolean thisInvitationWaiting = invitationWaiting && ref.equals(invitationTargetRef);
+            boolean thisInvitationAccepted = thisInvitationWaiting
+                    && "accepted".equals(invitation.optString("status"));
             if (thisHelperActive) {
                 setButtonDisabled(helpButton, name + "正在协助");
             } else if (anotherHelperActive) {
                 setButtonDisabled(helpButton, "已有家属正在协助");
+            } else if (thisInvitationAccepted) {
+                helpButton.setText("继续开启屏幕共享");
+                helpButton.setOnClickListener(v -> resumeAcceptedFamilyHelp(
+                        invitation.optString("id", ""), ref, name, helpButton));
             } else if (thisInvitationWaiting) {
                 helpButton.setText("取消邀请");
                 helpButton.setOnClickListener(v -> cancelSelectedFamilyHelp(invitation.optString("id", ""), name, helpButton));
@@ -1740,6 +1750,19 @@ public class MainActivity extends Activity {
             memberCard.addView(helpButton);
             list.addView(memberCard);
         }
+    }
+
+    private void resumeAcceptedFamilyHelp(String invitationId, String memberRef,
+                                          String memberName, Button sourceButton) {
+        if (invitationId.isEmpty() || memberRef.isEmpty() || captureRequestInProgress) {
+            return;
+        }
+        pendingHelpInvitationId = invitationId;
+        pendingTargetHelperRef = memberRef;
+        pendingTargetHelperName = memberName;
+        selectedFamilyHelpButton = sourceButton;
+        setButtonBusy(sourceButton, "正在打开屏幕共享...");
+        requestHelpAndCapture();
     }
 
     private void requestSelectedFamilyHelp(String memberRef, String memberName, Button sourceButton) {
