@@ -162,6 +162,15 @@ final class AssistNotifier {
         String id = invitation.optString("id", "");
         if (id.isEmpty()) return;
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (id.equals(prefs.getString("handledFamilyHelpInvitationId", ""))) return;
+        if (id.equals(prefs.getString("respondingFamilyHelpInvitationId", ""))) {
+            long respondingAt = prefs.getLong("respondingFamilyHelpInvitationAtMs", 0L);
+            if (respondingAt > 0 && System.currentTimeMillis() - respondingAt < 15_000L) return;
+            prefs.edit()
+                    .remove("respondingFamilyHelpInvitationId")
+                    .remove("respondingFamilyHelpInvitationAtMs")
+                    .commit();
+        }
         prefs.edit().putString("pendingFamilyHelpInvitation", invitation.toString()).commit();
         if (isAppUiForeground(context)) return;
         if (id.equals(prefs.getString("notifiedFamilyHelpInvitationId", ""))) return;
