@@ -40,7 +40,7 @@
     <main>
       <header class="topbar">
         <div><p id="pageEyebrow">今日运行</p><h1 id="pageTitle">运营总览</h1></div>
-        <div class="topbar-actions"><span id="refreshTime">正在读取</span><button id="refreshButton" class="icon-button" title="刷新当前数据" aria-label="刷新">↻</button></div>
+        <div class="topbar-actions"><span id="refreshTime">正在读取</span><button id="passwordButton" class="account-button">修改密码</button><button id="refreshButton" class="icon-button" title="刷新当前数据" aria-label="刷新">↻</button></div>
       </header>
       <div id="notice" class="notice" hidden></div>
       <section id="content" class="content" aria-live="polite"></section>
@@ -55,6 +55,17 @@
       <div class="dialog-actions"><button value="cancel" class="secondary-button">取消</button><button id="confirmEnd" value="default" class="danger-button">确认结束</button></div>
     </form>
   </dialog>
-  <script src="/admin/assets/admin.js?v=20260813b" defer></script>
+  <dialog id="passwordDialog">
+    <form id="passwordForm" method="dialog">
+      <div class="dialog-heading"><p>账户安全</p><h2>修改管理员密码</h2></div>
+      <p>修改后，其他已登录的管理员会话将立即退出。</p>
+      <label>当前密码<input id="currentPassword" type="password" autocomplete="current-password" required></label>
+      <label>新密码<input id="newPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required><small>至少 12 位，建议使用 20 位以上随机密码。</small></label>
+      <label>确认新密码<input id="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+      <p id="passwordError" class="form-error" hidden></p>
+      <div class="dialog-actions"><button value="cancel" class="secondary-button">取消</button><button value="default" class="primary-button">确认修改</button></div>
+    </form>
+  </dialog>
+  <script src="/admin/assets/admin.js?v=20260813c" defer></script>
 </body>
 </html>

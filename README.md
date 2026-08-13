@@ -88,6 +88,8 @@ ADMIN_PASSWORD=与APP用户密码不同的长随机密码
 
 后台提供运营总览、用户与亲属关系、协助会话、问题诊断和管理审计。它不提供用户屏幕画面、完整手机号、密码或会话令牌。
 
+登录后可在右上角修改管理员密码。新密码会以 PBKDF2 哈希保存到 Relay 数据目录的 `admin-credential.json`，修改后其他管理员会话会立即失效。
+
 Logo 可编辑实现位于：
 
 - `scripts/GenerateLogoAssets.java`

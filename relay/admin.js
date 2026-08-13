@@ -5,13 +5,16 @@ const crypto = require("crypto");
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const LOGIN_WINDOW_MS = 10 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 8;
+const PASSWORD_ITERATIONS = 310000;
 
 function createAdminConsole(options) {
   const adminDir = path.join(__dirname, "admin");
   const sessions = new Map();
   const loginAttempts = new Map();
   const auditFile = path.join(options.dataDir, "admin-audit.json");
+  const credentialFile = path.join(options.dataDir, "admin-credential.json");
   let adminAudit = loadAudit(auditFile);
+  let storedCredential = loadCredential(credentialFile);
 
   function handle(req, res, url) {
     if (!url.pathname.startsWith("/admin")) return false;
@@ -83,6 +86,37 @@ function createAdminConsole(options) {
     }
     if (req.method === "GET" && url.pathname === "/admin/api/me") {
       sendAdminJson(res, 200, { ok: true, user: { username: auth.session.username, role: "super_admin" }, csrf: auth.session.csrf });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/admin/api/password") {
+      const payload = JSON.parse((await options.readBody(req)).toString("utf8"));
+      const currentPassword = String(payload.currentPassword || "");
+      const newPassword = String(payload.newPassword || "");
+      if (!verifyAdminPassword(currentPassword)) {
+        appendAudit("password_change_failed", auth.session.username, req, { reason: "current_password_mismatch" });
+        sendAdminJson(res, 403, { error: "current password is incorrect" });
+        return;
+      }
+      if (newPassword.length < 12 || newPassword.length > 128) {
+        sendAdminJson(res, 400, { error: "new password must contain 12 to 128 characters" });
+        return;
+      }
+      if (safeEqual(currentPassword, newPassword) || safeEqual(adminUsername(), newPassword)) {
+        sendAdminJson(res, 400, { error: "new password is not allowed" });
+        return;
+      }
+      const nextCredential = {
+        passwordHash: hashPassword(newPassword),
+        updatedAt: new Date().toISOString(),
+      };
+      saveCredential(credentialFile, nextCredential);
+      storedCredential = nextCredential;
+      for (const sessionId of sessions.keys()) {
+        if (sessionId !== auth.id) sessions.delete(sessionId);
+      }
+      auth.session.csrf = randomToken();
+      appendAudit("password_changed", auth.session.username, req, {});
+      sendAdminJson(res, 200, { ok: true, csrf: auth.session.csrf });
       return;
     }
 
@@ -157,12 +191,16 @@ function createAdminConsole(options) {
   }
 
   function adminConfigured() {
+    if (storedCredential && storedCredential.passwordHash) return true;
     const password = String(process.env.ADMIN_PASSWORD || "");
     const passwordHash = String(process.env.ADMIN_PASSWORD_HASH || "");
     return password.length >= 12 || passwordHash.startsWith("pbkdf2_sha256$");
   }
 
   function verifyAdminPassword(password) {
+    if (storedCredential && storedCredential.passwordHash) {
+      return verifyPasswordHash(password, storedCredential.passwordHash);
+    }
     const configuredHash = String(process.env.ADMIN_PASSWORD_HASH || "");
     if (configuredHash) return verifyPasswordHash(password, configuredHash);
     return safeEqual(password, String(process.env.ADMIN_PASSWORD || ""));
@@ -387,11 +425,27 @@ function safeEqual(left, right) {
 
 function verifyPasswordHash(password, stored) {
   const parts = String(stored || "").split("$");
-  if (parts.length !== 4 || parts[0] !== "pbkdf2_sha256") return false;
+  if (!validPasswordHashParts(parts)) return false;
   const iterations = Number(parts[1]);
-  if (!Number.isSafeInteger(iterations) || iterations < 100000 || iterations > 2000000) return false;
   const actual = base64Url(crypto.pbkdf2Sync(String(password), parts[2], iterations, 32, "sha256"));
   return safeEqual(actual, parts[3]);
+}
+
+function hashPassword(password) {
+  const salt = base64Url(crypto.randomBytes(18));
+  const derived = crypto.pbkdf2Sync(String(password), salt, PASSWORD_ITERATIONS, 32, "sha256");
+  return `pbkdf2_sha256$${PASSWORD_ITERATIONS}$${salt}$${base64Url(derived)}`;
+}
+
+function validPasswordHashParts(parts) {
+  const iterations = Number(parts[1]);
+  return parts.length === 4
+    && parts[0] === "pbkdf2_sha256"
+    && Number.isSafeInteger(iterations)
+    && iterations >= 100000
+    && iterations <= 2000000
+    && parts[2].length >= 16
+    && parts[3].length >= 32;
 }
 
 function base64Url(buffer) {
@@ -425,6 +479,23 @@ function loadAudit(filename) {
   } catch (_) {
     return [];
   }
+}
+
+function loadCredential(filename) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filename, "utf8"));
+    return parsed && validPasswordHashParts(String(parsed.passwordHash || "").split("$")) ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveCredential(filename, credential) {
+  fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+  const temporary = `${filename}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(credential, null, 2), { mode: 0o600 });
+  fs.renameSync(temporary, filename);
+  fs.chmodSync(filename, 0o600);
 }
 
 function sendFile(res, filename, contentType) {

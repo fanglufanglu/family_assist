@@ -40,11 +40,11 @@ async function get(path) {
   return { status: response.status, body: await response.json() };
 }
 
-async function adminLogin() {
+async function adminLogin(password = "admin-test-password") {
   const response = await fetch(baseUrl + "/admin/api/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ username: "operator", password: "admin-test-password" }),
+    body: JSON.stringify({ username: "operator", password }),
   });
   const body = await response.json();
   return {
@@ -117,6 +117,30 @@ async function run() {
   const emptyDashboard = await adminRequest("/admin/api/dashboard", admin);
   assert(emptyDashboard.status === 200 && emptyDashboard.body.metrics.users === 0,
     "administrator dashboard should be available after login");
+  const secondAdmin = await adminLogin();
+  const wrongCurrentPassword = await adminRequest("/admin/api/password", admin, {
+    method: "POST",
+    body: { currentPassword: "wrong-current-password", newPassword: "replacement-admin-password" },
+  });
+  assert(wrongCurrentPassword.status === 403, "administrator password change must verify the current password");
+  const weakAdminPassword = await adminRequest("/admin/api/password", admin, {
+    method: "POST",
+    body: { currentPassword: "admin-test-password", newPassword: "too-short" },
+  });
+  assert(weakAdminPassword.status === 400, "administrator password change must reject weak passwords");
+  const changedAdminPassword = await adminRequest("/admin/api/password", admin, {
+    method: "POST",
+    body: { currentPassword: "admin-test-password", newPassword: "replacement-admin-password" },
+  });
+  assert(changedAdminPassword.status === 200 && changedAdminPassword.body.csrf,
+    "administrator should be able to persist a new password");
+  admin.body.csrf = changedAdminPassword.body.csrf;
+  const revokedAdminSession = await adminRequest("/admin/api/me", secondAdmin);
+  assert(revokedAdminSession.status === 401, "changing the administrator password must revoke other sessions");
+  const oldAdminLogin = await adminLogin();
+  const newAdminLogin = await adminLogin("replacement-admin-password");
+  assert(oldAdminLogin.status === 403 && newAdminLogin.status === 200,
+    "only the new administrator password should work after a change");
   const pairCode = "regression001";
   const elderRegister = await post("/api/account/register", { phone: "13800000001", password: "elderPass123", name: "妈妈" });
   const familyRegister = await post("/api/account/register", { phone: "13800000002", password: "familyPass123", name: "女儿" });
