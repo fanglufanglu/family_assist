@@ -47,11 +47,13 @@ cd /opt/family_assist
 git pull
 chmod +x scripts/install-aliyun-production.sh scripts/check-aliyun-production.sh
 DB_PASSWORD='替换成数据库长随机密码' bash scripts/install-postgres-backup.sh
-TURN_PASSWORD='替换成TURN长随机密码' DB_PASSWORD='同上数据库密码' bash scripts/install-aliyun-production.sh
+ADMIN_PASSWORD='替换成后台独立长随机密码' TURN_PASSWORD='替换成TURN长随机密码' DB_PASSWORD='同上数据库密码' bash scripts/install-aliyun-production.sh
 LE_EMAIL='证书到期通知邮箱' bash scripts/enable-aliyun-ip-https.sh
 ```
 
 安装脚本会将长辈端屏幕共享心跳超时设为 30 秒。长辈端崩溃、被系统结束或断网后，relay 会自动结束旧会话，避免家属端长时间停留在“协助中”。
+
+管理后台位于 `https://服务器地址/admin/`。`ADMIN_PASSWORD` 至少 12 位，必须与 TURN、PostgreSQL 及 APP 账号密码不同，生产环境建议使用至少 20 位随机字符。后台只展示脱敏业务数据，不提供用户屏幕、密码、账号令牌和完整手机号。
 
 ## PostgreSQL 与每日备份
 

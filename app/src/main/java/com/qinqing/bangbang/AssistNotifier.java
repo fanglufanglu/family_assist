@@ -122,7 +122,7 @@ final class AssistNotifier {
         }
     }
 
-    static void showAssistEndedNotification(Context context) {
+    static void showAssistEndedNotification(Context context, String title, String message) {
         if (Build.VERSION.SDK_INT >= 33
                 && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             return;
@@ -139,14 +139,14 @@ final class AssistNotifier {
                 ? new Notification.Builder(context, CHANNEL_URGENT)
                 : new Notification.Builder(context);
         Notification notification = builder
-                .setContentTitle("家人已结束本次协助")
-                .setContentText("屏幕共享已停止。需要帮助时，可以再次发起求助。")
+                .setContentTitle(title)
+                .setContentText(message)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
                 .setCategory(Notification.CATEGORY_STATUS)
                 .setColor(0xFFDC2626)
                 .setStyle(new Notification.BigTextStyle()
-                        .bigText("屏幕共享和远程操作都已停止。需要帮助时，可以再次发起求助。"))
+                        .bigText(message))
                 .setPriority(Notification.PRIORITY_HIGH)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setDefaults(Notification.DEFAULT_ALL)
@@ -376,12 +376,18 @@ final class AssistNotifier {
         if (updatedAt.isEmpty()) {
             updatedAt = "ended";
         }
+        String endReason = family.optString("lastEndReason", "");
+        boolean adminEnded = "admin_ended".equals(endReason);
+        String title = adminEnded ? "平台已结束本次协助" : "家人已结束本次协助";
+        String message = adminEnded
+                ? "为保护协助安全，本次屏幕共享和远程操作已停止。"
+                : "屏幕共享和远程操作都已停止。需要帮助时，可以再次发起求助。";
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         if (updatedAt.equals(prefs.getString("handledAssistEndedAt", ""))) {
             return;
         }
         prefs.edit()
-                .putString("pendingAssistMessage", "家人已结束本次协助。需要帮助时，可以再次发起求助。")
+                .putString("pendingAssistMessage", title + "。" + message)
                 .putString("pendingAssistEndedAt", updatedAt)
                 .putBoolean("pendingAssistEndedEvent", true)
                 .commit();
@@ -393,10 +399,10 @@ final class AssistNotifier {
             return;
         }
         prefs.edit().putString("notifiedAssistEndedAt", updatedAt).commit();
-        showAssistEndedNotification(context);
+        showAssistEndedNotification(context, title, message);
         showUrgentOverlay(context,
-                "本次协助已结束",
-                "家人已结束协助，屏幕共享和远程操作都已停止。",
+                title,
+                message,
                 "ended:" + updatedAt);
     }
 

@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { URL } = require("url");
 const crypto = require("crypto");
+const { createAdminConsole } = require("./admin");
 let PgPool = null;
 try {
   PgPool = require("pg").Pool;
@@ -171,8 +172,9 @@ function makeId(prefix) {
 }
 
 function requestAddress(req) {
-  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
-  return forwarded || req.socket.remoteAddress || "unknown";
+  const realIp = String(req.headers["x-real-ip"] || "").trim();
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",").pop().trim();
+  return realIp || forwarded || req.socket.remoteAddress || "unknown";
 }
 
 function rateLimitKey(req, scope, phone) {
@@ -749,11 +751,76 @@ function expireStaleSession(family) {
   return true;
 }
 
+function adminSnapshot() {
+  const uniqueUsers = new Map();
+  for (const user of users.values()) {
+    if (!user || !user.id) continue;
+    const safeUser = { ...user };
+    delete safeUser.passwordHash;
+    delete safeUser.passwordReset;
+    delete safeUser.accountToken;
+    uniqueUsers.set(user.id, safeUser);
+  }
+  const familyEntries = [...families.entries()].map(([pairCode, family]) => ({ pairCode, family }));
+  const crashes = [];
+  const businessAudit = [];
+  for (const [pairCode, family] of families.entries()) {
+    const familyId = crypto.createHash("sha256").update(pairCode).digest("hex").slice(0, 12);
+    for (const crash of family.crashes || []) {
+      const safeCrash = { ...crash, familyId };
+      delete safeCrash.stack;
+      crashes.push(safeCrash);
+    }
+    for (const event of family.audit || []) {
+      const safeDetail = { ...(event.detail || {}) };
+      delete safeDetail.phone;
+      delete safeDetail.x;
+      delete safeDetail.y;
+      businessAudit.push({ ...event, detail: safeDetail, familyId });
+    }
+  }
+  return {
+    users: [...uniqueUsers.values()],
+    families: familyEntries,
+    crashes,
+    businessAudit,
+    health: {
+      storageReady,
+      postgres: Boolean(pgPool),
+      turnConfigured: Boolean(process.env.TURN_URLS),
+      uptimeSeconds: Math.round(process.uptime()),
+    },
+  };
+}
+
+function adminEndSession(sessionId, actor, reason) {
+  for (const [pairCode, family] of families.entries()) {
+    if (!family.active || family.sessionId !== sessionId) continue;
+    resetSessionState(family, "admin_ended");
+    audit(family, "admin_session_ended", { sessionId, actor, reason });
+    return {
+      sessionId,
+      familyId: crypto.createHash("sha256").update(pairCode).digest("hex").slice(0, 12),
+    };
+  }
+  return null;
+}
+
+const adminConsole = createAdminConsole({
+  dataDir: DATA_DIR,
+  readBody,
+  requestAddress,
+  snapshot: adminSnapshot,
+  endSession: adminEndSession,
+});
+
 const server = http.createServer(async (req, res) => {
   const startedAt = Date.now();
   res.on("finish", () => logRequest(req, res, startedAt));
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
+
+    if (adminConsole.handle(req, res, url)) return;
 
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
       sendJson(res, 200, { ok: true });
@@ -1942,6 +2009,7 @@ const server = http.createServer(async (req, res) => {
       result.family.webrtc.elderIce = [];
       result.family.webrtc.familyIce = [];
       result.family.webrtc.updatedAt = result.family.webrtc.offer.updatedAt;
+      audit(result.family, "webrtc_offer_created", { sessionId: result.family.sessionId });
       sendJson(res, 200, { ok: true });
       return;
     }
@@ -1973,6 +2041,7 @@ const server = http.createServer(async (req, res) => {
         updatedAt: new Date().toISOString(),
       };
       result.family.webrtc.updatedAt = result.family.webrtc.answer.updatedAt;
+      audit(result.family, "webrtc_answer_created", { sessionId: result.family.sessionId });
       sendJson(res, 200, { ok: true });
       return;
     }

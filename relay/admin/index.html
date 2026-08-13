@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>亲情帮帮·运营中心</title>
+  <link rel="stylesheet" href="/admin/assets/admin.css?v=20260813">
+  <link rel="stylesheet" href="/admin/assets/admin-state.css?v=20260813">
+</head>
+<body>
+  <section id="loginView" class="login-shell">
+    <div class="login-brand">
+      <img class="brand-logo" src="/admin/assets/brand.png" alt="">
+      <div><strong>亲情帮帮</strong><span>运营与安全中心</span></div>
+    </div>
+    <form id="loginForm" class="login-panel">
+      <div class="login-heading"><p>管理员入口</p><h1>看清每一次协助</h1><span>会话质量、用户关系与安全事件集中管理。</span></div>
+      <label>管理员账号<input name="username" autocomplete="username" required></label>
+      <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+      <p id="loginError" class="form-error" hidden></p>
+      <button type="submit" class="primary-button">安全登录</button>
+    </form>
+    <p class="login-footnote">管理后台不保存用户屏幕画面，所有处置操作均会留下审计记录。</p>
+  </section>
+
+  <div id="appView" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="sidebar-brand"><img class="brand-logo" src="/admin/assets/brand.png" alt=""><div><strong>亲情帮帮</strong><small>运营中心</small></div></div>
+      <nav id="navigation" aria-label="主导航">
+        <button data-view="overview" class="active"><span class="nav-icon">◫</span>总览</button>
+        <button data-view="users"><span class="nav-icon">○</span>用户</button>
+        <button data-view="families"><span class="nav-icon">◇</span>亲属关系</button>
+        <button data-view="sessions"><span class="nav-icon">▷</span>协助会话</button>
+        <button data-view="diagnostics"><span class="nav-icon">⌕</span>问题诊断</button>
+        <button data-view="audit"><span class="nav-icon">≡</span>管理审计</button>
+      </nav>
+      <div class="sidebar-footer"><span id="adminName">admin</span><button id="logoutButton">退出</button></div>
+    </aside>
+    <main>
+      <header class="topbar">
+        <div><p id="pageEyebrow">今日运行</p><h1 id="pageTitle">运营总览</h1></div>
+        <div class="topbar-actions"><span id="refreshTime">正在读取</span><button id="refreshButton" class="icon-button" title="刷新当前数据" aria-label="刷新">↻</button></div>
+      </header>
+      <div id="notice" class="notice" hidden></div>
+      <section id="content" class="content" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <dialog id="endDialog">
+    <form id="endForm" method="dialog">
+      <div class="dialog-heading"><p>高风险操作</p><h2>结束这次协助？</h2></div>
+      <p>屏幕共享和本次远程操作授权将立即关闭，双方会收到结束状态。</p>
+      <label>处置原因<textarea id="endReason" required maxlength="200" placeholder="例如：用户来电要求结束异常会话"></textarea></label>
+      <div class="dialog-actions"><button value="cancel" class="secondary-button">取消</button><button id="confirmEnd" value="default" class="danger-button">确认结束</button></div>
+    </form>
+  </dialog>
+  <script src="/admin/assets/admin.js?v=20260813" defer></script>
+</body>
+</html>

@@ -75,6 +75,19 @@ Webhook 收到的 JSON：
 
 阿里云 ECS、PostgreSQL、TURN、Nginx 和无域名 IP HTTPS 的步骤见 [ALIYUN_PRODUCTION.md](ALIYUN_PRODUCTION.md)。
 
+## Web 管理后台
+
+管理后台地址为 `/admin/`，使用独立的管理员会话，不复用 APP 账号。开启前必须配置：
+
+```text
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=与APP用户密码不同的长随机密码
+```
+
+后台密码至少 12 位，生产环境建议使用 20 位以上随机密码。管理员登录与 APP 账号完全隔离；后台接口仅提供脱敏手机号和匿名家庭编号，不返回密码、账号令牌、绑定码或屏幕内容。
+
+后台提供运营总览、用户与亲属关系、协助会话、问题诊断和管理审计。它不提供用户屏幕画面、完整手机号、密码或会话令牌。
+
 Logo 可编辑实现位于：
 
 - `scripts/GenerateLogoAssets.java`

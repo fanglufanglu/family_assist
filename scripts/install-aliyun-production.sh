@@ -11,10 +11,24 @@ DB_NAME="${DB_NAME:-family_assist}"
 DB_USER="${DB_USER:-family_assist}"
 DB_PASSWORD="${DB_PASSWORD:-}"
 RELAY_DATA_DIR="${RELAY_DATA_DIR:-/var/lib/family-assist-relay}"
+ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+ADMIN_PASSWORD_HASH="${ADMIN_PASSWORD_HASH:-}"
 
 if [[ "${TURN_PASSWORD}" == "change-this-turn-password" ]]; then
   echo "Please set TURN_PASSWORD before running this script."
   echo "Example: TURN_PASSWORD='a-long-random-password' bash scripts/install-aliyun-production.sh"
+  exit 1
+fi
+
+if [[ -z "${ADMIN_PASSWORD}" && -z "${ADMIN_PASSWORD_HASH}" ]]; then
+  echo "Please set ADMIN_PASSWORD or ADMIN_PASSWORD_HASH before running this script."
+  echo "Example: ADMIN_PASSWORD='a-different-long-random-password' TURN_PASSWORD='...' bash scripts/install-aliyun-production.sh"
+  exit 1
+fi
+
+if [[ -n "${ADMIN_PASSWORD}" && ${#ADMIN_PASSWORD} -lt 12 ]]; then
+  echo "ADMIN_PASSWORD must contain at least 12 characters. 20 or more is recommended."
   exit 1
 fi
 
@@ -47,6 +61,9 @@ WorkingDirectory=${APP_DIR}
 Environment=PORT=${RELAY_PORT}
 Environment=RELAY_DATA_DIR=${RELAY_DATA_DIR}
 Environment=ELDER_HEARTBEAT_TIMEOUT_MS=30000
+Environment="ADMIN_USERNAME=${ADMIN_USERNAME}"
+Environment="ADMIN_PASSWORD=${ADMIN_PASSWORD}"
+Environment="ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH}"
 Environment=TURN_URLS=turn:${PUBLIC_IP}:3478?transport=udp,turn:${PUBLIC_IP}:3478?transport=tcp
 Environment=TURN_USERNAME=${TURN_USER}
 Environment=TURN_CREDENTIAL=${TURN_PASSWORD}
@@ -73,6 +90,7 @@ server {
         proxy_pass http://127.0.0.1:${RELAY_PORT};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
     }

@@ -11,6 +11,8 @@ const relay = spawn(process.execPath, ["server.js"], {
     RELAY_DATA_DIR: `/tmp/family-assist-relay-test-${process.pid}`,
     RESET_CODE_EXPOSED: "true",
     ELDER_HEARTBEAT_TIMEOUT_MS: "2500",
+    ADMIN_USERNAME: "operator",
+    ADMIN_PASSWORD: "admin-test-password",
   },
   stdio: ["ignore", "pipe", "inherit"],
 });
@@ -35,6 +37,36 @@ async function post(path, payload) {
 
 async function get(path) {
   const response = await fetch(baseUrl + path);
+  return { status: response.status, body: await response.json() };
+}
+
+async function adminLogin() {
+  const response = await fetch(baseUrl + "/admin/api/login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "operator", password: "admin-test-password" }),
+  });
+  const body = await response.json();
+  return {
+    status: response.status,
+    body,
+    cookie: String(response.headers.get("set-cookie") || "").split(";")[0],
+  };
+}
+
+async function adminRequest(path, login, options = {}) {
+  const method = options.method || "GET";
+  const response = await fetch(baseUrl + path, {
+    method,
+    headers: {
+      cookie: login.cookie,
+      ...(method === "POST" ? {
+        "content-type": "application/json",
+        "x-admin-csrf": login.body.csrf,
+      } : {}),
+    },
+    ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+  });
   return { status: response.status, body: await response.json() };
 }
 
@@ -77,6 +109,14 @@ async function startAcceptedHelp({ pairCode, elderToken, familyToken, targetHelp
 
 async function run() {
   await waitUntilReady();
+  const anonymousAdmin = await get("/admin/api/dashboard");
+  assert(anonymousAdmin.status === 401, "admin data must require a separate administrator login");
+  const admin = await adminLogin();
+  assert(admin.status === 200 && admin.body.csrf && admin.cookie.includes("qbb_admin="),
+    "administrator login should issue an isolated session and CSRF token");
+  const emptyDashboard = await adminRequest("/admin/api/dashboard", admin);
+  assert(emptyDashboard.status === 200 && emptyDashboard.body.metrics.users === 0,
+    "administrator dashboard should be available after login");
   const pairCode = "regression001";
   const elderRegister = await post("/api/account/register", { phone: "13800000001", password: "elderPass123", name: "妈妈" });
   const familyRegister = await post("/api/account/register", { phone: "13800000002", password: "familyPass123", name: "女儿" });
@@ -526,6 +566,38 @@ async function run() {
     "relay should clear an abandoned elder capture session");
   assert(recoveredState.body.assistPhase === "idle",
     "timed-out assistance should return to the idle phase");
+  const emergencyHelp = await startAcceptedHelp({
+    pairCode,
+    elderToken,
+    familyToken: first.body.authToken,
+    targetHelperRef: firstRelative.ref,
+  });
+  const adminSessions = await adminRequest("/admin/api/sessions", admin);
+  assert(adminSessions.status === 200
+      && adminSessions.body.items.some((item) => item.id === emergencyHelp.body.sessionId && item.status === "active"),
+    "administrator should see active assistance without screen content or auth tokens");
+  const adminUsers = await adminRequest("/admin/api/users", admin);
+  const adminDiagnostics = await adminRequest("/admin/api/diagnostics", admin);
+  const adminPayload = JSON.stringify({ users: adminUsers.body, diagnostics: adminDiagnostics.body });
+  assert(!adminPayload.includes(elderAccount.body.accountToken)
+      && !adminPayload.includes(familyAccount.body.accountToken)
+      && !adminPayload.includes("elderPass123")
+      && !adminPayload.includes("13800000001"),
+    "administrator APIs must not expose account tokens, passwords, or full phone numbers");
+  const invalidCsrf = await fetch(baseUrl + `/admin/api/sessions/${emergencyHelp.body.sessionId}/end`, {
+    method: "POST",
+    headers: { cookie: admin.cookie, "content-type": "application/json", "x-admin-csrf": "invalid" },
+    body: JSON.stringify({ reason: "must be rejected" }),
+  });
+  assert(invalidCsrf.status === 403, "administrator write operations must reject an invalid CSRF token");
+  const adminEnd = await adminRequest(`/admin/api/sessions/${emergencyHelp.body.sessionId}/end`, admin, {
+    method: "POST",
+    body: { reason: "automated regression cleanup" },
+  });
+  assert(adminEnd.status === 200, "administrator should be able to end an exceptional active session");
+  const afterAdminEnd = await get(`/api/help?pairCode=${pairCode}&authToken=${elderToken}`);
+  assert(!afterAdminEnd.body.active && afterAdminEnd.body.lastEndReason === "admin_ended",
+    "administrator emergency end should synchronize the business session state");
   const unbind = await post("/api/unbind", { pairCode, authToken: first.body.authToken });
   assert(unbind.status === 200, "family should be able to unbind after assistance ends");
   const elderAfterUnbind = await get(`/api/bind/status?pairCode=${pairCode}&authToken=${elderToken}`);

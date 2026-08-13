@@ -167,13 +167,18 @@ public class FamilyInviteMonitorService extends Service {
         String endReason = state.optString("lastEndReason", "");
         if (!state.optBoolean("active", false)
                 && state.optBoolean("lastEndedForCurrent", false)
-                && ("elder_ended".equals(endReason) || "elder_disconnected".equals(endReason))
+                && ("elder_ended".equals(endReason) || "elder_disconnected".equals(endReason)
+                    || "admin_ended".equals(endReason))
                 && isRecent(state.optString("lastEndedAt", ""))) {
             boolean disconnected = "elder_disconnected".equals(endReason);
+            boolean adminEnded = "admin_ended".equals(endReason);
             AssistNotifier.handlePeerEvent(this,
                     "assist-ended-" + state.optString("lastEndedAt", ""),
-                    disconnected ? "协助连接已断开" : "长辈已结束本次求助",
-                    disconnected
+                    disconnected ? "协助连接已断开"
+                            : (adminEnded ? "平台已结束本次协助" : "长辈已结束本次求助"),
+                    adminEnded
+                            ? "为保护协助安全，屏幕共享和远程操作均已关闭。"
+                            : disconnected
                             ? "长辈的屏幕共享已停止，可以稍后重新发起协助。"
                             : "屏幕共享和远程操作均已关闭。 ");
         }
@@ -240,7 +245,8 @@ public class FamilyInviteMonitorService extends Service {
             AssistNotifier.handleControlRequest(this, state);
         }
         if (!state.optBoolean("active", true)
-                && "family_ended".equals(state.optString("lastEndReason", ""))
+                && ("family_ended".equals(state.optString("lastEndReason", ""))
+                    || "admin_ended".equals(state.optString("lastEndReason", "")))
                 && isRecent(state.optString("lastEndedAt", ""))) {
             AssistNotifier.handleAssistEnded(this, state);
         }
