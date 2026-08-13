@@ -625,19 +625,12 @@ public class MainActivity extends Activity {
         status.setVisibility(View.GONE);
 
         TextView accountButton = settingsRow("退出登录", "退出当前设备，不会删除亲属关系");
-        boolean elderMode = "elder".equals(selectedAppRole);
-        TextView relativesButton = settingsRow("家人管理",
-                elderMode ? "查看和邀请可信家人" : "查看和管理已绑定长辈");
         TextView roleButton = settingsRow("使用身份", "当前为" + roleDisplayName(selectedAppRole) + "，身份跟随账号保存");
         TextView safetyButton = settingsRow("安全与权限", "管理画圈、敏感保护和远程操作");
         TextView privacyButton = settingsRow("隐私政策", "了解信息如何被使用和保护");
         TextView deleteButton = settingsRow("注销账号", "永久删除账号和相关绑定");
 
         accountButton.setOnClickListener(v -> confirmLogout());
-        relativesButton.setOnClickListener(v -> {
-            if (elderMode) showElderFamilyMembers();
-            else showRelativesManagement();
-        });
         roleButton.setOnClickListener(v -> showRoleSwitchGuide());
         safetyButton.setOnClickListener(v -> {
             if (isBoundAs("elder")) {
@@ -655,7 +648,6 @@ public class MainActivity extends Activity {
 
         LinearLayout familySettings = card("家庭与身份", "");
         familySettings.addView(roleButton);
-        familySettings.addView(relativesButton);
         root.addView(familySettings);
 
         LinearLayout privacySettings = card("安全与隐私", "");
@@ -3523,6 +3515,7 @@ public class MainActivity extends Activity {
                 JSONObject help = NetworkClient.getJson(baseUrl, "/api/help?pairCode=" + encoded + "&authToken=" + token);
                 boolean active = help.optBoolean("active", false);
                 boolean wasActive = familyLastActive || !familyLastSessionId.isEmpty();
+                String lastEndReason = help.optString("lastEndReason", "");
                 familyLastActive = active;
                 familyControlAllowed = help.optBoolean("controlAllowed", false);
                 boolean controlRequested = help.optBoolean("controlRequested", false);
@@ -3570,7 +3563,12 @@ public class MainActivity extends Activity {
                         }
                         if (familyPageTitleView != null) familyPageTitleView.setText("协助长辈");
                         if (wasActive) {
-                            updateFamilyWaiting("本次协助已结束", "需要继续时，可在“家人”页面重新发起。");
+                            if ("elder_disconnected".equals(lastEndReason)) {
+                                updateFamilyWaiting("屏幕共享已中断",
+                                        "长辈手机的共享连接已停止。确认对方网络正常后，可重新发起协助。");
+                            } else {
+                                updateFamilyWaiting("本次协助已结束", "需要继续时，可在“家人”页面重新发起。");
+                            }
                             showFamilyWaitingRetryAction();
                         }
                         setStatus(wasActive
@@ -3606,7 +3604,8 @@ public class MainActivity extends Activity {
                         stopFamilyWebRtc();
                         clearFamilyScreen();
                         setFamilySessionActive(false);
-                        setStatus(helperName + " 已在协助长辈。本次只能由一位家属操作，结束后你可以继续接入。");
+                        updateFamilyWaiting("其他家人正在协助",
+                                helperName + "正在帮助长辈。本次只能由一位家人操作。");
                     });
                     return;
                 }

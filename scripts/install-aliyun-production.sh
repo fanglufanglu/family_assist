@@ -46,6 +46,7 @@ After=network.target
 WorkingDirectory=${APP_DIR}
 Environment=PORT=${RELAY_PORT}
 Environment=RELAY_DATA_DIR=${RELAY_DATA_DIR}
+Environment=ELDER_HEARTBEAT_TIMEOUT_MS=30000
 Environment=TURN_URLS=turn:${PUBLIC_IP}:3478?transport=udp,turn:${PUBLIC_IP}:3478?transport=tcp
 Environment=TURN_USERNAME=${TURN_USER}
 Environment=TURN_CREDENTIAL=${TURN_PASSWORD}

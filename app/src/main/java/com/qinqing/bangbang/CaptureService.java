@@ -191,16 +191,21 @@ public class CaptureService extends Service {
         }
         lastAssistStateCheckMs = now;
         try {
-            String pair = URLEncoder.encode(pairCode, StandardCharsets.UTF_8.name());
-            String token = URLEncoder.encode(authToken, StandardCharsets.UTF_8.name());
-            JSONObject result = NetworkClient.getJson(baseUrl, "/api/bind/status?pairCode=" + pair + "&authToken=" + token);
+            JSONObject result = NetworkClient.postJson(baseUrl, "/api/elder/heartbeat", new JSONObject()
+                    .put("pairCode", pairCode)
+                    .put("authToken", authToken)
+                    .put("sessionId", sessionId));
             JSONObject family = result.optJSONObject("family");
             AssistNotifier.handleControlRequest(this, family);
             if (family != null && !family.optBoolean("active", false)) {
                 AssistNotifier.handleAssistEnded(this, family);
                 stopSelf();
             }
-        } catch (Exception ignored) {
+        } catch (Exception error) {
+            String message = String.valueOf(error.getMessage());
+            if (message.contains("HTTP 409") || message.contains("not active")) {
+                stopSelf();
+            }
         }
     }
 

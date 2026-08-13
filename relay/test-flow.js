@@ -10,6 +10,7 @@ const relay = spawn(process.execPath, ["server.js"], {
     PORT: String(port),
     RELAY_DATA_DIR: `/tmp/family-assist-relay-test-${process.pid}`,
     RESET_CODE_EXPOSED: "true",
+    ELDER_HEARTBEAT_TIMEOUT_MS: "2500",
   },
   stdio: ["ignore", "pipe", "inherit"],
 });
@@ -265,6 +266,8 @@ async function run() {
   });
   assert(familyInitiatedHelp.status === 200 && familyInitiatedHelp.body.family.targetHelperName === "女儿",
     "screen sharing should start only after the elder accepts the relative's request");
+  assert(familyInitiatedHelp.body.family.assistPhase === "active",
+    "relay should expose one authoritative active assistance phase");
   const activeElderStatus = await get(`/api/bind/status?pairCode=${securePairCode}&authToken=${secureInvite.body.authToken}`);
   assert(activeElderStatus.body.family.active
     && activeElderStatus.body.family.activeHelperRef === relativesStatus.body.family.familyMembers[0].ref,
@@ -383,6 +386,11 @@ async function run() {
 
   const nextHelp = await post("/api/help", { pairCode, authToken: elderToken, elderName: "妈妈" });
   assert(nextHelp.status === 200 && nextHelp.body.sessionId !== sessionId, "elder should start a fresh second session");
+  const heartbeat = await post("/api/elder/heartbeat", {
+    pairCode, authToken: elderToken, sessionId: nextHelp.body.sessionId,
+  });
+  assert(heartbeat.status === 200 && heartbeat.body.family.active,
+    "elder heartbeat should keep the current session active");
   await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
   const staleAnnotation = await post("/api/annotation", {
     pairCode,
@@ -410,6 +418,14 @@ async function run() {
   assert(stillActive.body.active && stillActive.body.sessionId === nextHelp.body.sessionId, "new session should survive stale end requests");
   const finalEnd = await post("/api/end", { pairCode, authToken: elderToken, sessionId: nextHelp.body.sessionId });
   assert(finalEnd.status === 200 && !finalEnd.body.stale, "elder should end the current session");
+  const abandonedHelp = await post("/api/help", { pairCode, authToken: elderToken, elderName: "妈妈" });
+  assert(abandonedHelp.status === 200, "elder should start a session used for timeout recovery");
+  await new Promise((resolve) => setTimeout(resolve, 2700));
+  const recoveredState = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
+  assert(!recoveredState.body.active && recoveredState.body.lastEndReason === "elder_disconnected",
+    "relay should clear an abandoned elder capture session");
+  assert(recoveredState.body.assistPhase === "idle",
+    "timed-out assistance should return to the idle phase");
   const unbind = await post("/api/unbind", { pairCode, authToken: first.body.authToken });
   assert(unbind.status === 200, "family should be able to unbind after assistance ends");
   const elderAfterUnbind = await get(`/api/bind/status?pairCode=${pairCode}&authToken=${elderToken}`);

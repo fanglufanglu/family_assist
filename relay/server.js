@@ -22,6 +22,7 @@ const STATE_FILE = process.env.RELAY_STATE_FILE || path.join(DATA_DIR, "relay-st
 const SAVE_DEBOUNCE_MS = 250;
 const CONTROL_REQUEST_COOLDOWN_MS = 15_000;
 const CONTROL_ACTION_COOLDOWN_MS = 120;
+const ELDER_HEARTBEAT_TIMEOUT_MS = Math.max(1_000, Number(process.env.ELDER_HEARTBEAT_TIMEOUT_MS || 30_000));
 const DATABASE_URL = process.env.DATABASE_URL || process.env.FAMILY_ASSIST_DATABASE_URL || "";
 const STATE_ID = "main";
 const PASSWORD_ITERATIONS = 310000;
@@ -108,6 +109,10 @@ function newFamily() {
     frameUpdatedAt: "",
     lastFamilySeenAtMs: 0,
     lastFamilySeenAt: "",
+    lastElderSeenAtMs: 0,
+    lastElderSeenAt: "",
+    lastEndReason: "",
+    lastEndedAt: "",
     masked: false,
     annotation: null,
     controlRequested: false,
@@ -367,6 +372,7 @@ function publicFamily(family, member, authToken) {
   const pendingBindRequests = Array.isArray(family.pendingBindRequests) ? family.pendingBindRequests : [];
   return {
     active: family.active,
+    assistPhase: currentAssistPhase(family),
     sessionId: family.sessionId,
     elderName: family.elderName,
     deviceName: family.deviceName,
@@ -374,6 +380,10 @@ function publicFamily(family, member, authToken) {
     frameUpdatedAt: family.frameUpdatedAt,
     lastFamilySeenAtMs: family.lastFamilySeenAtMs,
     lastFamilySeenAt: family.lastFamilySeenAt,
+    lastElderSeenAtMs: family.lastElderSeenAtMs,
+    lastElderSeenAt: family.lastElderSeenAt,
+    lastEndReason: family.lastEndReason,
+    lastEndedAt: family.lastEndedAt,
     masked: family.masked,
     controlRequested: family.controlRequested,
     controlAllowed: family.controlAllowed,
@@ -470,6 +480,7 @@ function requireMember(res, pairCode, authToken, role) {
     sendJson(res, 403, { error: "not bound" });
     return null;
   }
+  expireStaleSession(family);
   return { family, member };
 }
 
@@ -658,7 +669,8 @@ function scheduleSave() {
   }, SAVE_DEBOUNCE_MS);
 }
 
-function resetSessionState(family) {
+function resetSessionState(family, reason = "ended") {
+  const endedAt = new Date().toISOString();
   family.active = false;
   family.sessionId = "";
   family.annotation = null;
@@ -671,13 +683,17 @@ function resetSessionState(family) {
   family.controlAction = null;
   family.lastFamilySeenAtMs = 0;
   family.lastFamilySeenAt = "";
+  family.lastElderSeenAtMs = 0;
+  family.lastElderSeenAt = "";
+  family.lastEndReason = reason;
+  family.lastEndedAt = endedAt;
   family.activeHelperToken = "";
   family.activeHelperName = "";
   family.targetHelperRef = "";
   family.targetHelperName = "";
   family.pendingHelpInvitation = null;
   family.pendingFamilyAssistRequest = null;
-  family.updatedAt = new Date().toISOString();
+  family.updatedAt = endedAt;
   family.webrtc = {
     offer: null,
     answer: null,
@@ -686,6 +702,33 @@ function resetSessionState(family) {
     updatedAt: family.updatedAt,
   };
   scheduleSave();
+}
+
+function touchElderSession(family) {
+  const now = Date.now();
+  family.lastElderSeenAtMs = now;
+  family.lastElderSeenAt = new Date(now).toISOString();
+}
+
+function currentAssistPhase(family) {
+  if (family.active) return "active";
+  const invitation = family.pendingHelpInvitation;
+  if (invitation && invitation.status === "accepted") return "waiting_screen_permission";
+  if (invitation && invitation.status === "pending") return "waiting_family_acceptance";
+  const familyRequest = family.pendingFamilyAssistRequest;
+  if (familyRequest && familyRequest.status === "accepted") return "waiting_screen_permission";
+  if (familyRequest && familyRequest.status === "pending") return "waiting_elder_acceptance";
+  return "idle";
+}
+
+function expireStaleSession(family) {
+  if (!family.active) return false;
+  const lastSeenAt = Number(family.lastElderSeenAtMs || 0);
+  if (lastSeenAt > 0 && Date.now() - lastSeenAt <= ELDER_HEARTBEAT_TIMEOUT_MS) return false;
+  const sessionId = family.sessionId;
+  resetSessionState(family, "elder_disconnected");
+  audit(family, "help_timed_out", { sessionId, timeoutMs: ELDER_HEARTBEAT_TIMEOUT_MS });
+  return true;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1548,6 +1591,9 @@ const server = http.createServer(async (req, res) => {
       family.frameUpdatedAt = "";
       family.lastFamilySeenAtMs = 0;
       family.lastFamilySeenAt = "";
+      touchElderSession(family);
+      family.lastEndReason = "";
+      family.lastEndedAt = "";
       family.controlRequested = false;
       family.controlAllowed = false;
       family.controlDecision = "idle";
@@ -1573,6 +1619,22 @@ const server = http.createServer(async (req, res) => {
         targetHelperName: family.targetHelperName,
       });
       sendJson(res, 200, { ok: true, sessionId: family.sessionId, family: publicFamily(family, result.member, authToken) });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/elder/heartbeat") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const pairCode = String(payload.pairCode || "").trim();
+      const authToken = String(payload.authToken || "").trim();
+      const sessionId = String(payload.sessionId || "").trim();
+      const result = requireMember(res, pairCode, authToken, "elder");
+      if (!result) return;
+      if (!result.family.active || !sessionId || sessionId !== result.family.sessionId) {
+        sendJson(res, 409, { error: "assist session is not active" });
+        return;
+      }
+      touchElderSession(result.family);
+      sendJson(res, 200, { ok: true, family: publicFamily(result.family, result.member, authToken) });
       return;
     }
 
@@ -1607,7 +1669,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { ok: true, stale: true });
         return;
       }
-      resetSessionState(result.family);
+      resetSessionState(result.family, "elder_ended");
       audit(result.family, "help_ended", { sessionId });
       sendJson(res, 200, { ok: true });
       return;
@@ -1625,7 +1687,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { ok: true, stale: true });
         return;
       }
-      resetSessionState(result.family);
+      resetSessionState(result.family, "family_ended");
       audit(result.family, "family_left", { sessionId, by: result.member.name });
       sendJson(res, 200, { ok: true, family: publicFamily(result.family, result.member, authToken) });
       return;
@@ -1911,6 +1973,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       family.frame = await readBody(req);
+      touchElderSession(family);
       family.masked = masked;
       family.frameUpdatedAt = new Date().toISOString();
       family.updatedAt = family.frameUpdatedAt;

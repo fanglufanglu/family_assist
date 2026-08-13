@@ -51,6 +51,8 @@ TURN_PASSWORD='替换成TURN长随机密码' DB_PASSWORD='同上数据库密码'
 LE_EMAIL='证书到期通知邮箱' bash scripts/enable-aliyun-ip-https.sh
 ```
 
+安装脚本会将长辈端屏幕共享心跳超时设为 30 秒。长辈端崩溃、被系统结束或断网后，relay 会自动结束旧会话，避免家属端长时间停留在“协助中”。
+
 ## PostgreSQL 与每日备份
 
 账号体系、亲属关系和审计记录正式化后，建议准备 PostgreSQL。当前脚本会安装 PostgreSQL、创建数据库、导入表结构，并配置每天凌晨 03:17 自动备份，备份保留 14 天。
