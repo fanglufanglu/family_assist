@@ -1565,21 +1565,22 @@ const server = http.createServer(async (req, res) => {
       }
       const targetHelperRef = String(payload.targetHelperRef || "").trim();
       const invitationId = String(payload.helpInvitationId || "").trim();
-      const targetHelper = targetHelperRef
-        ? familyMembers(family).find(([token, member]) => memberReference(token, member) === targetHelperRef)
-        : null;
-      if (targetHelperRef && !targetHelper) {
+      if (!targetHelperRef) {
+        sendJson(res, 409, { error: "selected family member is required" });
+        return;
+      }
+      const targetHelper = familyMembers(family)
+        .find(([token, member]) => memberReference(token, member) === targetHelperRef);
+      if (!targetHelper) {
         sendJson(res, 404, { error: "family member not found" });
         return;
       }
-      if (targetHelperRef) {
-        const invitation = family.pendingHelpInvitation;
-        if (!invitation || invitation.id !== invitationId
-            || invitation.targetHelperRef !== targetHelperRef
-            || invitation.status !== "accepted") {
-          sendJson(res, 409, { error: "help invitation was not accepted" });
-          return;
-        }
+      const invitation = family.pendingHelpInvitation;
+      if (!invitation || invitation.id !== invitationId
+          || invitation.targetHelperRef !== targetHelperRef
+          || invitation.status !== "accepted") {
+        sendJson(res, 409, { error: "help invitation was not accepted" });
+        return;
       }
       family.sessionId = makeSessionId();
       family.active = true;
@@ -1600,10 +1601,10 @@ const server = http.createServer(async (req, res) => {
       family.controlReason = "";
       family.controlUpdatedAt = family.updatedAt;
       family.controlAction = null;
-      family.activeHelperToken = targetHelper ? targetHelper[0] : "";
-      family.activeHelperName = targetHelper ? (targetHelper[1].name || "家属") : "";
+      family.activeHelperToken = targetHelper[0];
+      family.activeHelperName = targetHelper[1].name || "家属";
       family.targetHelperRef = targetHelperRef;
-      family.targetHelperName = targetHelper ? (targetHelper[1].name || "家属") : "";
+      family.targetHelperName = targetHelper[1].name || "家属";
       family.pendingHelpInvitation = null;
       family.pendingFamilyAssistRequest = null;
       family.webrtc = {

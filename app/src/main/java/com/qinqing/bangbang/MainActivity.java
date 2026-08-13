@@ -1130,14 +1130,8 @@ public class MainActivity extends Activity {
         helpButton.setTextSize(24);
         Button stopButton = dangerButton("结束本次求助");
 
-        helpButton.setOnClickListener(v -> {
-            pendingTargetHelperRef = "";
-            pendingTargetHelperName = "";
-            pendingHelpInvitationId = "";
-            setButtonBusy(helpButton, needsOverlayPermission() ? "正在打开权限..." : "正在打开屏幕授权...");
-            handleElderPrimaryAction();
-        });
-        stopButton.setOnClickListener(v -> stopAssistance("本次求助已结束。"));
+        helpButton.setOnClickListener(v -> showElderFamilyMembers());
+        stopButton.setOnClickListener(v -> confirmStopAssistance());
         LinearLayout stepsCard = card(assisting ? "协助进行中" : elderCurrentStepTitle(), elderAssistHintText());
         if (assisting) {
             root.addView(stepsCard);
@@ -1446,11 +1440,20 @@ public class MainActivity extends Activity {
             } else if ("accepted".equals(requestState)) {
                 setButtonDisabled(assistButton, elderName + "正在开启屏幕共享");
             } else {
-                assistButton.setOnClickListener(v -> requestAssistFromElder(membership, elderName, assistButton));
+                assistButton.setOnClickListener(v -> confirmRequestAssistFromElder(membership, elderName, assistButton));
             }
             elderCard.addView(assistButton);
             list.addView(elderCard);
         }
+    }
+
+    private void confirmRequestAssistFromElder(JSONObject membership, String elderName, Button sourceButton) {
+        new AlertDialog.Builder(this)
+                .setTitle("请求协助" + elderName + "？")
+                .setMessage("发送后会立即提醒" + elderName + "。对方同意并确认屏幕共享后，你才能看到画面；远程操作仍需另行授权。")
+                .setPositiveButton("发送请求", (dialog, which) -> requestAssistFromElder(membership, elderName, sourceButton))
+                .setNegativeButton("暂不发送", null)
+                .show();
     }
 
     private void requestAssistFromElder(JSONObject membership, String elderName, Button sourceButton) {
@@ -1592,9 +1595,9 @@ public class MainActivity extends Activity {
         familyRemoteButton = controlPrimaryButton("远程操作");
         familyEndButton = dangerButton("结束本次协助");
         familyChangeBindingButton = familySecondaryButton("选择家人");
-        familyControlRequestButton.setOnClickListener(v -> requestRemoteControl(familyControlRequestButton));
+        familyControlRequestButton.setOnClickListener(v -> confirmRemoteControlRequest(familyControlRequestButton));
         familyRemoteButton.setOnClickListener(v -> showRemoteControlPanel());
-        familyEndButton.setOnClickListener(v -> endFamilyAssistView());
+        familyEndButton.setOnClickListener(v -> confirmEndFamilyAssist());
         familyChangeBindingButton.setOnClickListener(v -> showRelativesManagement());
 
         root.addView(status);
@@ -1737,11 +1740,20 @@ public class MainActivity extends Activity {
             } else if (invitationWaiting) {
                 setButtonDisabled(helpButton, "已邀请其他家属");
             } else {
-                helpButton.setOnClickListener(v -> requestSelectedFamilyHelp(ref, name, helpButton));
+                helpButton.setOnClickListener(v -> confirmSelectedFamilyHelp(ref, name, helpButton));
             }
             memberCard.addView(helpButton);
             list.addView(memberCard);
         }
+    }
+
+    private void confirmSelectedFamilyHelp(String memberRef, String memberName, Button sourceButton) {
+        new AlertDialog.Builder(this)
+                .setTitle("请" + memberName + "帮忙？")
+                .setMessage("发送后会立即提醒" + memberName + "。对方接受后，手机会进入第 2 步，由系统确认是否共享屏幕。")
+                .setPositiveButton("发送求助", (dialog, which) -> requestSelectedFamilyHelp(memberRef, memberName, sourceButton))
+                .setNegativeButton("再想想", null)
+                .show();
     }
 
     private void resumeAcceptedFamilyHelp(String invitationId, String memberRef,
@@ -1901,6 +1913,8 @@ public class MainActivity extends Activity {
             JSONObject invitation = new JSONObject(raw);
             String invitationId = invitation.optString("id", "");
             String elderName = invitation.optString("elderName", "长辈");
+            String invitationPairCode = invitation.optString("membershipPairCode", pairCode);
+            String invitationAuthToken = invitation.optString("membershipAuthToken", authToken);
             if (invitationId.isEmpty() || !"pending".equals(invitation.optString("status", "pending"))) {
                 prefs.edit().remove("pendingFamilyHelpInvitation").apply();
                 return;
@@ -1916,11 +1930,11 @@ public class MainActivity extends Activity {
                     .setMessage("接受后，长辈才会开始共享屏幕。请确认现在方便协助。")
                     .setPositiveButton("接受并准备协助", (dialog, which) -> {
                         markFamilyHelpInvitationResponding(invitationId);
-                        respondToFamilyHelpInvitation(invitationId, elderName, true);
+                        respondToFamilyHelpInvitation(invitationId, elderName, invitationPairCode, invitationAuthToken, true);
                     })
                     .setNegativeButton("暂时无法协助", (dialog, which) -> {
                         markFamilyHelpInvitationResponding(invitationId);
-                        respondToFamilyHelpInvitation(invitationId, elderName, false);
+                        respondToFamilyHelpInvitation(invitationId, elderName, invitationPairCode, invitationAuthToken, false);
                     })
                     .setCancelable(false)
                     .show();
@@ -1954,17 +1968,29 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    private void respondToFamilyHelpInvitation(String invitationId, String elderName, boolean accepted) {
+    private void respondToFamilyHelpInvitation(String invitationId, String elderName,
+                                                String invitationPairCode, String invitationAuthToken,
+                                                boolean accepted) {
         prefs.edit().remove("pendingFamilyHelpInvitation").apply();
         AssistNotifier.cancelHelpInviteNotification(this);
         statusIo.execute(() -> {
             try {
                 NetworkClient.postJson(baseUrl, "/api/help/invite/respond", new JSONObject()
-                        .put("pairCode", pairCode)
-                        .put("authToken", authToken)
+                        .put("pairCode", invitationPairCode)
+                        .put("authToken", invitationAuthToken)
                         .put("invitationId", invitationId)
                         .put("accepted", accepted));
                 main.post(() -> {
+                    if (accepted) {
+                        pairCode = invitationPairCode;
+                        authToken = invitationAuthToken;
+                        memberRole = "family";
+                        prefs.edit()
+                                .putString("pairCode", pairCode)
+                                .putString("authToken", authToken)
+                                .putString("memberRole", memberRole)
+                                .apply();
+                    }
                     respondingFamilyHelpInvitationId = "";
                     familyHelpInvitePromptShowing = false;
                     prefs.edit()
@@ -2232,12 +2258,7 @@ public class MainActivity extends Activity {
         menu.setOnMenuItemClickListener(item -> {
             String title = String.valueOf(item.getTitle());
             if ("结束本次协助".equals(title)) {
-                new AlertDialog.Builder(this)
-                        .setTitle("结束本次协助？")
-                        .setMessage("结束后，长辈的屏幕共享和远程操作授权会立即关闭。")
-                        .setPositiveButton("结束协助", (dialog, which) -> endFamilyAssistView())
-                        .setNegativeButton("继续协助", null)
-                        .show();
+                confirmEndFamilyAssist();
             } else {
                 showRelativesManagement();
             }
@@ -2338,12 +2359,9 @@ public class MainActivity extends Activity {
         familyFullscreenControlRequestButton = darkToolbarButton("申请远程操作");
         familyFullscreenRemoteButton = darkToolbarButton("操作菜单");
         familyFullscreenEndButton = darkToolbarDangerButton("结束协助");
-        familyFullscreenControlRequestButton.setOnClickListener(v -> requestRemoteControl(familyFullscreenControlRequestButton));
+        familyFullscreenControlRequestButton.setOnClickListener(v -> confirmRemoteControlRequest(familyFullscreenControlRequestButton));
         familyFullscreenRemoteButton.setOnClickListener(v -> showRemoteControlPanel());
-        familyFullscreenEndButton.setOnClickListener(v -> {
-            closeFamilyFullscreen();
-            endFamilyAssistView();
-        });
+        familyFullscreenEndButton.setOnClickListener(v -> confirmEndFamilyAssist());
         addFamilyAction(bar, familyFullscreenControlRequestButton);
         addFamilyAction(bar, familyFullscreenRemoteButton);
         addFamilyAction(bar, familyFullscreenEndButton);
@@ -3337,6 +3355,21 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void confirmEndFamilyAssist() {
+        if (familyEnding || !familyLastActive) {
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("结束本次协助？")
+                .setMessage("结束后，长辈会收到提醒，屏幕共享和本次远程操作授权也会立即关闭。")
+                .setPositiveButton("确认结束", (dialog, which) -> {
+                    closeFamilyFullscreen();
+                    endFamilyAssistView();
+                })
+                .setNegativeButton("继续协助", null)
+                .show();
+    }
+
     private void clearFamilyScreen() {
         if (frameView != null) {
             frameView.setImageDrawable(null);
@@ -3762,6 +3795,18 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void confirmRemoteControlRequest(Button sourceButton) {
+        if (remoteRequestInProgress || familyControlAllowed) {
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("申请远程操作？")
+                .setMessage("发送后会提醒长辈。只有长辈明确同意并开启辅助服务后，你才能操作本次共享画面。")
+                .setPositiveButton("发送申请", (dialog, which) -> requestRemoteControl(sourceButton))
+                .setNegativeButton("暂不申请", null)
+                .show();
+    }
+
     private void updateFamilyControlButton(boolean requested, boolean allowed) {
         updateFamilyControlState(requested, allowed, requested ? "pending" : (allowed ? "allowed" : "idle"), "", "");
     }
@@ -4183,6 +4228,18 @@ public class MainActivity extends Activity {
         if (neverConnected || disconnectedTooLong) {
             main.post(() -> stopAssistance("家人长时间没有连接，本次求助已结束。需要帮助时可以重新发起。"));
         }
+    }
+
+    private void confirmStopAssistance() {
+        if (!prefs.getBoolean("assistActive", false)) {
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("结束本次求助？")
+                .setMessage("结束后，家人会收到提醒，屏幕共享和本次远程操作授权也会立即关闭。")
+                .setPositiveButton("确认结束", (dialog, which) -> stopAssistance("本次求助已结束。"))
+                .setNegativeButton("继续求助", null)
+                .show();
     }
 
     private void stopAssistance(String message) {
@@ -4675,30 +4732,18 @@ public class MainActivity extends Activity {
     }
 
     private String elderPrimaryButtonText() {
-        if (needsOverlayPermission()) {
-            return "完成首次设置";
-        }
-        return "请家人帮忙";
+        return "选择家人求助";
     }
 
     private String elderCurrentStepTitle() {
-        if (needsOverlayPermission()) {
-            return "首次使用需要设置";
-        }
-        return "准备好了";
+        return "需要帮助时";
     }
 
     private String elderAssistHintText() {
         if (prefs.getBoolean("assistActive", false)) {
             return "现在可以打开需要帮助的应用。结束时回到这里点“结束本次求助”。";
         }
-        if (needsOverlayPermission()) {
-            return "只需设置一次。按提示允许画圈显示，然后返回这里。";
-        }
-        if (!isAccessibilityServiceEnabled()) {
-            return "点上面的按钮，再在系统提示中点“立即开始”。";
-        }
-        return "点上面的按钮并确认屏幕共享，家人就能看到画面。";
+        return "先选择要联系的家人。对方接受后，再按系统提示确认屏幕共享。";
     }
 
     private String bindingStatusText() {

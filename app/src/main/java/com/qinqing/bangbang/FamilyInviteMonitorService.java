@@ -15,6 +15,7 @@ import android.os.IBinder;
 import android.os.Looper;
 
 import org.json.JSONObject;
+import org.json.JSONArray;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -71,22 +72,27 @@ public class FamilyInviteMonitorService extends Service {
         String role = prefs.getString("memberRole", "");
         String pairCode = prefs.getString("pairCode", "");
         String authToken = prefs.getString("authToken", "");
+        String accountToken = prefs.getString("accountToken", "");
+        String selectedAppRole = prefs.getString("selectedAppRole", "");
         String baseUrl = prefs.getString("baseUrl", "");
-        if (!("family".equals(role) || "elder".equals(role))
-                || pairCode.isEmpty() || authToken.isEmpty() || baseUrl.isEmpty()) {
+        if (baseUrl.isEmpty()) {
             return;
         }
         polling = true;
         io.execute(() -> {
             try {
-                if ("family".equals(role)) {
+                if ("family".equals(selectedAppRole) && !accountToken.isEmpty()) {
+                    pollAllFamilyMemberships(baseUrl, accountToken, prefs);
+                } else if ("family".equals(role) && !pairCode.isEmpty() && !authToken.isEmpty()) {
                     JSONObject result = NetworkClient.getJson(baseUrl,
                             "/api/help/invite?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
                     JSONObject invitation = result.optJSONObject("invitation");
                     if (invitation != null && "pending".equals(invitation.optString("status", "pending"))) {
+                        invitation.put("membershipPairCode", pairCode);
+                        invitation.put("membershipAuthToken", authToken);
                         AssistNotifier.handleHelpInvite(this, invitation);
                     }
-                } else {
+                } else if ("elder".equals(role) && !pairCode.isEmpty() && !authToken.isEmpty()) {
                     JSONObject result = NetworkClient.getJson(baseUrl,
                             "/api/help/family-request?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
                     JSONObject request = result.optJSONObject("request");
@@ -99,6 +105,31 @@ public class FamilyInviteMonitorService extends Service {
                 polling = false;
             }
         });
+    }
+
+    private void pollAllFamilyMemberships(String baseUrl, String accountToken, SharedPreferences prefs) throws Exception {
+        JSONObject account = NetworkClient.getJson(baseUrl,
+                "/api/account/me?accountToken=" + encoded(accountToken));
+        JSONArray memberships = account.optJSONArray("memberships");
+        if (memberships == null) return;
+        String handledId = prefs.getString("handledFamilyHelpInvitationId", "");
+        for (int index = 0; index < memberships.length(); index++) {
+            JSONObject membership = memberships.optJSONObject(index);
+            if (membership == null || !"family".equals(membership.optString("role", ""))) continue;
+            String membershipPairCode = membership.optString("pairCode", "");
+            String membershipAuthToken = membership.optString("authToken", "");
+            if (membershipPairCode.isEmpty() || membershipAuthToken.isEmpty()) continue;
+            JSONObject result = NetworkClient.getJson(baseUrl,
+                    "/api/help/invite?pairCode=" + encoded(membershipPairCode)
+                            + "&authToken=" + encoded(membershipAuthToken));
+            JSONObject invitation = result.optJSONObject("invitation");
+            if (invitation == null || !"pending".equals(invitation.optString("status", "pending"))
+                    || handledId.equals(invitation.optString("id", ""))) continue;
+            invitation.put("membershipPairCode", membershipPairCode);
+            invitation.put("membershipAuthToken", membershipAuthToken);
+            AssistNotifier.handleHelpInvite(this, invitation);
+            return;
+        }
     }
 
     private String encoded(String value) {

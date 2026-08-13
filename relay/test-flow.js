@@ -50,6 +50,31 @@ async function waitUntilReady() {
   throw new Error("relay did not start");
 }
 
+async function startAcceptedHelp({ pairCode, elderToken, familyToken, targetHelperRef, elderName = "妈妈" }) {
+  const invitation = await post("/api/help/invite", {
+    pairCode,
+    authToken: elderToken,
+    elderName,
+    targetHelperRef,
+  });
+  assert(invitation.status === 200 && invitation.body.invitation.id,
+    "elder should create a targeted help invitation");
+  const accepted = await post("/api/help/invite/respond", {
+    pairCode,
+    authToken: familyToken,
+    invitationId: invitation.body.invitation.id,
+    accepted: true,
+  });
+  assert(accepted.status === 200, "selected relative should accept the help invitation");
+  return post("/api/help", {
+    pairCode,
+    authToken: elderToken,
+    elderName,
+    targetHelperRef,
+    helpInvitationId: invitation.body.invitation.id,
+  });
+}
+
 async function run() {
   await waitUntilReady();
   const pairCode = "regression001";
@@ -303,6 +328,7 @@ async function run() {
   assert(overLimit.status === 409, "family binding should enforce the member limit");
 
   const legacyRelatives = await get(`/api/bind/status?pairCode=${pairCode}&authToken=${elderToken}`);
+  const firstRelative = legacyRelatives.body.family.familyMembers.find((item) => item.name === "女儿");
   const selectedRelative = legacyRelatives.body.family.familyMembers.find((item) => item.name === "儿子");
   const selectedInvite = await post("/api/help/invite", {
     pairCode,
@@ -339,7 +365,14 @@ async function run() {
     "the selected relative should claim a targeted session");
   await post("/api/end", { pairCode, authToken: elderToken, sessionId: selectedHelp.body.sessionId });
 
-  const help = await post("/api/help", { pairCode, authToken: elderToken, elderName: "妈妈" });
+  const untargetedHelp = await post("/api/help", { pairCode, authToken: elderToken, elderName: "妈妈" });
+  assert(untargetedHelp.status === 409, "elder must select an accepted relative before assistance starts");
+  const help = await startAcceptedHelp({
+    pairCode,
+    elderToken,
+    familyToken: first.body.authToken,
+    targetHelperRef: firstRelative.ref,
+  });
   assert(help.status === 200, "elder should start assistance");
   const sessionId = help.body.sessionId;
 
@@ -384,7 +417,12 @@ async function run() {
   const endedState = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
   assert(!endedState.body.active && !endedState.body.controlAllowed, "ending should clear active and control state");
 
-  const nextHelp = await post("/api/help", { pairCode, authToken: elderToken, elderName: "妈妈" });
+  const nextHelp = await startAcceptedHelp({
+    pairCode,
+    elderToken,
+    familyToken: first.body.authToken,
+    targetHelperRef: firstRelative.ref,
+  });
   assert(nextHelp.status === 200 && nextHelp.body.sessionId !== sessionId, "elder should start a fresh second session");
   const heartbeat = await post("/api/elder/heartbeat", {
     pairCode, authToken: elderToken, sessionId: nextHelp.body.sessionId,
@@ -418,7 +456,12 @@ async function run() {
   assert(stillActive.body.active && stillActive.body.sessionId === nextHelp.body.sessionId, "new session should survive stale end requests");
   const finalEnd = await post("/api/end", { pairCode, authToken: elderToken, sessionId: nextHelp.body.sessionId });
   assert(finalEnd.status === 200 && !finalEnd.body.stale, "elder should end the current session");
-  const abandonedHelp = await post("/api/help", { pairCode, authToken: elderToken, elderName: "妈妈" });
+  const abandonedHelp = await startAcceptedHelp({
+    pairCode,
+    elderToken,
+    familyToken: first.body.authToken,
+    targetHelperRef: firstRelative.ref,
+  });
   assert(abandonedHelp.status === 200, "elder should start a session used for timeout recovery");
   await new Promise((resolve) => setTimeout(resolve, 2700));
   const recoveredState = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
