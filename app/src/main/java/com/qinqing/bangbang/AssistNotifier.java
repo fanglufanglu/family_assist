@@ -22,6 +22,7 @@ final class AssistNotifier {
     private static final int NOTIFICATION_ASSIST_ENDED = 3002;
     private static final int NOTIFICATION_HELP_INVITE = 3003;
     private static final int NOTIFICATION_FAMILY_ASSIST_REQUEST = 3004;
+    private static final int NOTIFICATION_PEER_EVENT = 3005;
 
     private AssistNotifier() {
     }
@@ -274,6 +275,66 @@ final class AssistNotifier {
         if (manager != null) manager.cancel(NOTIFICATION_FAMILY_ASSIST_REQUEST);
     }
 
+    static synchronized void handlePeerEvent(Context context, String eventKey, String title, String message) {
+        if (eventKey == null || eventKey.isEmpty()) return;
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String seenKey = "peerEventSeen_" + Integer.toHexString(eventKey.hashCode());
+        if (prefs.getBoolean(seenKey, false)) return;
+        String pending = prefs.getString("pendingPeerEvent", "");
+        if (!pending.isEmpty()) return;
+        try {
+            prefs.edit()
+                    .putBoolean(seenKey, true)
+                    .putString("pendingPeerEvent", new JSONObject()
+                            .put("key", eventKey)
+                            .put("title", title)
+                            .put("message", message)
+                            .toString())
+                    .commit();
+        } catch (Exception ignored) {
+            return;
+        }
+        if (isAppUiForeground(context)) return;
+        showPeerEventNotification(context, title, message);
+        showUrgentOverlay(context, title, message, "peer-event:" + eventKey);
+    }
+
+    private static void showPeerEventNotification(Context context, String title, String message) {
+        if (Build.VERSION.SDK_INT >= 33
+                && context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return;
+        Intent intent = new Intent(context, MainActivity.class)
+                .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pendingIntent = PendingIntent.getActivity(
+                context, 5, intent,
+                Build.VERSION.SDK_INT >= 23
+                        ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                        : PendingIntent.FLAG_UPDATE_CURRENT);
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(context, CHANNEL_URGENT)
+                : new Notification.Builder(context);
+        Notification notification = builder
+                .setContentTitle(title)
+                .setContentText(message)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentIntent(pendingIntent)
+                .setCategory(Notification.CATEGORY_STATUS)
+                .setColor(0xFFD83F5F)
+                .setStyle(new Notification.BigTextStyle().bigText(message))
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setVisibility(Notification.VISIBILITY_PUBLIC)
+                .setDefaults(Notification.DEFAULT_ALL)
+                .setOnlyAlertOnce(true)
+                .setAutoCancel(true)
+                .build();
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) manager.notify(NOTIFICATION_PEER_EVENT, notification);
+    }
+
+    static void cancelPeerEventNotification(Context context) {
+        NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (manager != null) manager.cancel(NOTIFICATION_PEER_EVENT);
+    }
+
     static synchronized void handleAssistEnded(Context context, JSONObject family) {
         if (family == null || family.optBoolean("active", true)) {
             return;
@@ -283,8 +344,12 @@ final class AssistNotifier {
             updatedAt = "ended";
         }
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (updatedAt.equals(prefs.getString("handledAssistEndedAt", ""))) {
+            return;
+        }
         prefs.edit()
                 .putString("pendingAssistMessage", "家人已结束本次协助。需要帮助时，可以再次发起求助。")
+                .putString("pendingAssistEndedAt", updatedAt)
                 .putBoolean("pendingAssistEndedEvent", true)
                 .commit();
         if (isAppUiForeground(context)) {

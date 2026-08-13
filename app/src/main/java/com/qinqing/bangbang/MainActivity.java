@@ -179,6 +179,7 @@ public class MainActivity extends Activity {
     private boolean rtcTrackAttached;
     private boolean familyMediaReady;
     private boolean assistEndPromptShowing;
+    private boolean peerEventPromptShowing;
     private boolean familyLastActive;
     private boolean elderInviteBoundShown;
     private int elderInviteBaselineFamilyCount = -1;
@@ -220,6 +221,7 @@ public class MainActivity extends Activity {
                 return;
             }
             maybeShowAssistEndedEvent();
+            maybeShowPeerEvent();
             maybeShowFamilyHelpInvitation();
             maybeShowElderFamilyAssistRequest();
             main.postDelayed(this, 700);
@@ -309,6 +311,7 @@ public class MainActivity extends Activity {
         prefs.edit().putBoolean("appForeground", true).commit();
         main.removeCallbacks(assistEndedUiLoop);
         maybeShowAssistEndedEvent();
+        maybeShowPeerEvent();
         maybeShowElderFamilyAssistRequest();
         main.postDelayed(assistEndedUiLoop, 700);
         String setupControl = prefs.getString("controlSetupRequestAt", "");
@@ -2614,6 +2617,16 @@ public class MainActivity extends Activity {
                         showFamily();
                         setStatus("长辈已同意绑定。正在等待长辈发起求助。");
                     });
+                } else if (result.optBoolean("rejected", false)) {
+                    prefs.edit()
+                            .remove("pendingBindToken")
+                            .remove("pendingBindPairCode")
+                            .apply();
+                    main.removeCallbacks(familyBindPendingLoopRunnable);
+                    main.post(() -> {
+                        showFamilyBind();
+                        setStatus("长辈未同意本次绑定。如有需要，请确认后重新申请。");
+                    });
                 } else {
                     main.post(() -> setStatus("还在等待长辈确认。"));
                 }
@@ -4277,9 +4290,12 @@ public class MainActivity extends Activity {
             return;
         }
         assistEndPromptShowing = true;
+        String endedAt = prefs.getString("pendingAssistEndedAt", "");
         prefs.edit()
                 .putBoolean("pendingAssistEndedEvent", false)
+                .putString("handledAssistEndedAt", endedAt)
                 .remove("pendingAssistMessage")
+                .remove("pendingAssistEndedAt")
                 .remove("pendingControlRequestAt")
                 .remove("controlSetupRequestAt")
                 .apply();
@@ -4295,6 +4311,34 @@ public class MainActivity extends Activity {
                 .setPositiveButton("知道了", (dialog, which) -> assistEndPromptShowing = false)
                 .setOnCancelListener(dialog -> assistEndPromptShowing = false)
                 .show();
+    }
+
+    private void maybeShowPeerEvent() {
+        if (!appInForeground || peerEventPromptShowing || isFinishing()) return;
+        String raw = prefs.getString("pendingPeerEvent", "");
+        if (raw.isEmpty()) return;
+        try {
+            JSONObject event = new JSONObject(raw);
+            String key = event.optString("key", "");
+            if (key.isEmpty() || key.equals(prefs.getString("handledPeerEventKey", ""))) {
+                prefs.edit().remove("pendingPeerEvent").apply();
+                return;
+            }
+            peerEventPromptShowing = true;
+            prefs.edit()
+                    .putString("handledPeerEventKey", key)
+                    .remove("pendingPeerEvent")
+                    .apply();
+            AssistNotifier.cancelPeerEventNotification(this);
+            new AlertDialog.Builder(this)
+                    .setTitle(event.optString("title", "协助状态已更新"))
+                    .setMessage(event.optString("message", "请查看当前协助状态。"))
+                    .setPositiveButton("知道了", (dialog, which) -> peerEventPromptShowing = false)
+                    .setOnCancelListener(dialog -> peerEventPromptShowing = false)
+                    .show();
+        } catch (Exception ignored) {
+            prefs.edit().remove("pendingPeerEvent").apply();
+        }
     }
 
     private void handleRemoteControlRequest(String updatedAt) {

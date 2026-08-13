@@ -149,6 +149,30 @@ async function run() {
   assert(secureConfirm.status === 200 && secureConfirm.body.approved, "elder should approve the family binding");
   const pendingDone = await get(`/api/bind/pending?pairCode=${securePairCode}&pendingToken=${secureBind.body.pendingToken}&accountToken=${familyAccount.body.accountToken}`);
   assert(pendingDone.status === 200 && pendingDone.body.approved && pendingDone.body.authToken, "family should receive auth token after approval");
+  const rejectedRegister = await post("/api/account/register", {
+    phone: "13800000004", password: "rejectedPass123", name: "儿子",
+  });
+  await post("/api/account/role", { accountToken: rejectedRegister.body.accountToken, appRole: "family" });
+  const rejectedBind = await post("/api/bind", {
+    pairCode: securePairCode,
+    inviteCode: secureInvite.body.inviteCode,
+    familyName: "儿子",
+    deviceId: "secure-family-rejected",
+    accountToken: rejectedRegister.body.accountToken,
+  });
+  const rejectedStatus = await get(`/api/bind/status?pairCode=${securePairCode}&authToken=${secureInvite.body.authToken}`);
+  const rejectedRequest = rejectedStatus.body.family.pendingBindRequests
+    .find((item) => item.requesterName === "儿子");
+  await post("/api/bind/confirm", {
+    pairCode: securePairCode,
+    authToken: secureInvite.body.authToken,
+    requestId: rejectedRequest.id,
+    approved: false,
+  });
+  const rejectedResult = await get(`/api/bind/pending?pairCode=${securePairCode}`
+    + `&pendingToken=${rejectedBind.body.pendingToken}&accountToken=${rejectedRegister.body.accountToken}`);
+  assert(rejectedResult.status === 200 && rejectedResult.body.rejected,
+    "family should receive an explicit binding rejection result");
   const relativesStatus = await get(`/api/bind/status?pairCode=${securePairCode}&authToken=${secureInvite.body.authToken}`);
   assert(relativesStatus.body.family.familyMembers.length === 1
     && relativesStatus.body.family.familyMembers[0].name === "女儿"
@@ -415,7 +439,11 @@ async function run() {
   const rightEnd = await post("/api/family/end", { pairCode, authToken: first.body.authToken, sessionId });
   assert(rightEnd.status === 200, "active relative should end the session");
   const endedState = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
-  assert(!endedState.body.active && !endedState.body.controlAllowed, "ending should clear active and control state");
+  const unrelatedEndedState = await get(`/api/help?pairCode=${pairCode}&authToken=${second.body.authToken}`);
+  assert(!endedState.body.active && !endedState.body.controlAllowed && endedState.body.lastEndedForCurrent,
+    "ending should clear active state and identify the relative who was assisting");
+  assert(!unrelatedEndedState.body.lastEndedForCurrent,
+    "an unrelated relative must not receive the session-ended event");
 
   const nextHelp = await startAcceptedHelp({
     pairCode,

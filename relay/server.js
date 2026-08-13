@@ -113,6 +113,8 @@ function newFamily() {
     lastElderSeenAt: "",
     lastEndReason: "",
     lastEndedAt: "",
+    lastEndedHelperRef: "",
+    lastEndedHelperName: "",
     masked: false,
     annotation: null,
     controlRequested: false,
@@ -130,6 +132,8 @@ function newFamily() {
     pendingHelpInvitation: null,
     pendingFamilyAssistRequest: null,
     pendingBindRequests: [],
+    bindDecisions: [],
+    lastMembershipEvent: null,
     audit: [],
     crashes: [],
     webrtc: {
@@ -384,6 +388,10 @@ function publicFamily(family, member, authToken) {
     lastElderSeenAt: family.lastElderSeenAt,
     lastEndReason: family.lastEndReason,
     lastEndedAt: family.lastEndedAt,
+    lastEndedHelperName: member && member.role === "elder" ? family.lastEndedHelperName : "",
+    lastEndedForCurrent: Boolean(member && member.role === "family"
+      && family.lastEndedHelperRef
+      && memberReference(authToken, member) === family.lastEndedHelperRef),
     masked: family.masked,
     controlRequested: family.controlRequested,
     controlAllowed: family.controlAllowed,
@@ -426,6 +434,7 @@ function publicFamily(family, member, authToken) {
         expiresAt: item.expiresAt,
       }))
       : [],
+    lastMembershipEvent: member && member.role === "elder" ? family.lastMembershipEvent : null,
   };
 }
 
@@ -551,6 +560,7 @@ function serializeFamily(family) {
       ? family.pendingFamilyAssistRequest
       : null,
     pendingBindRequests: (family.pendingBindRequests || []).filter((item) => Date.now() <= Number(item.expiresAt || 0)),
+    bindDecisions: (family.bindDecisions || []).filter((item) => Date.now() <= Number(item.expiresAt || 0)),
     members: [...family.members.entries()],
     webrtc: {
       offer: null,
@@ -567,6 +577,9 @@ function hydrateFamily(raw) {
   family.members = new Map(Array.isArray(raw && raw.members) ? raw.members : []);
   family.pendingBindRequests = Array.isArray(raw && raw.pendingBindRequests)
     ? raw.pendingBindRequests.filter((item) => Date.now() <= Number(item.expiresAt || 0))
+    : [];
+  family.bindDecisions = Array.isArray(raw && raw.bindDecisions)
+    ? raw.bindDecisions.filter((item) => Date.now() <= Number(item.expiresAt || 0))
     : [];
   family.frame = null;
   family.annotation = null;
@@ -671,6 +684,11 @@ function scheduleSave() {
 
 function resetSessionState(family, reason = "ended") {
   const endedAt = new Date().toISOString();
+  const endedHelper = family.activeHelperToken ? family.members.get(family.activeHelperToken) : null;
+  family.lastEndedHelperRef = endedHelper
+    ? memberReference(family.activeHelperToken, endedHelper)
+    : family.targetHelperRef;
+  family.lastEndedHelperName = family.activeHelperName || family.targetHelperName || "";
   family.active = false;
   family.sessionId = "";
   family.annotation = null;
@@ -1157,6 +1175,11 @@ const server = http.createServer(async (req, res) => {
       const name = result.member.name || "家属";
       result.family.members.delete(authToken);
       result.family.updatedAt = new Date().toISOString();
+      result.family.lastMembershipEvent = {
+        type: "family_unbound",
+        name,
+        updatedAt: result.family.updatedAt,
+      };
       audit(result.family, "family_unbound", { name });
       sendJson(res, 200, { ok: true });
       return;
@@ -1178,20 +1201,30 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const request = pendingRequests[index];
+      if (approved && family.active) {
+        sendJson(res, 409, { error: "assist session is active" });
+        return;
+      }
+      if (approved && familyMembers(family).length >= MAX_FAMILY_MEMBERS) {
+        sendJson(res, 409, { error: "family member limit reached", maxFamilyMembers: MAX_FAMILY_MEMBERS });
+        return;
+      }
       pendingRequests.splice(index, 1);
       family.pendingBindRequests = pendingRequests;
+      family.bindDecisions = (family.bindDecisions || [])
+        .filter((item) => Date.now() <= Number(item.expiresAt || 0));
+      family.bindDecisions.push({
+        pendingToken: request.pendingToken,
+        accountToken: request.accountToken || "",
+        approved,
+        requesterName: request.requesterName || "家属",
+        updatedAt: new Date().toISOString(),
+        expiresAt: Date.now() + 10 * 60 * 1000,
+      });
       if (!approved) {
         family.updatedAt = new Date().toISOString();
         audit(family, "family_bind_rejected", { name: request.requesterName, phone: request.requesterPhone });
         sendJson(res, 200, { ok: true, approved: false, family: publicFamily(family, result.member, authToken) });
-        return;
-      }
-      if (family.active) {
-        sendJson(res, 409, { error: "assist session is active" });
-        return;
-      }
-      if (familyMembers(family).length >= MAX_FAMILY_MEMBERS) {
-        sendJson(res, 409, { error: "family member limit reached", maxFamilyMembers: MAX_FAMILY_MEMBERS });
         return;
       }
       const familyToken = makeToken();
@@ -1221,6 +1254,18 @@ const server = http.createServer(async (req, res) => {
       const pending = (family.pendingBindRequests || []).find((item) => item.pendingToken === pendingToken);
       if (pending && Date.now() <= Number(pending.expiresAt || 0)) {
         sendJson(res, 200, { ok: true, pendingApproval: true, expiresAt: pending.expiresAt });
+        return;
+      }
+      const decision = (family.bindDecisions || []).find((item) => item.pendingToken === pendingToken
+        && item.accountToken === String(url.searchParams.get("accountToken") || "").trim()
+        && Date.now() <= Number(item.expiresAt || 0));
+      if (decision && !decision.approved) {
+        sendJson(res, 200, {
+          ok: true,
+          approved: false,
+          rejected: true,
+          updatedAt: decision.updatedAt,
+        });
         return;
       }
       const member = familyMembers(family).find(([, item]) => item.accountToken && item.accountToken === String(url.searchParams.get("accountToken") || "").trim());

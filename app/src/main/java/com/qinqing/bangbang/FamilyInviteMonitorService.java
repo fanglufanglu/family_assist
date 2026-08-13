@@ -19,6 +19,7 @@ import org.json.JSONArray;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -81,24 +82,13 @@ public class FamilyInviteMonitorService extends Service {
         polling = true;
         io.execute(() -> {
             try {
+                pollPendingBinding(baseUrl, accountToken, prefs);
                 if ("family".equals(selectedAppRole) && !accountToken.isEmpty()) {
                     pollAllFamilyMemberships(baseUrl, accountToken, prefs);
                 } else if ("family".equals(role) && !pairCode.isEmpty() && !authToken.isEmpty()) {
-                    JSONObject result = NetworkClient.getJson(baseUrl,
-                            "/api/help/invite?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
-                    JSONObject invitation = result.optJSONObject("invitation");
-                    if (invitation != null && "pending".equals(invitation.optString("status", "pending"))) {
-                        invitation.put("membershipPairCode", pairCode);
-                        invitation.put("membershipAuthToken", authToken);
-                        AssistNotifier.handleHelpInvite(this, invitation);
-                    }
+                    pollFamilyMembership(baseUrl, pairCode, authToken);
                 } else if ("elder".equals(role) && !pairCode.isEmpty() && !authToken.isEmpty()) {
-                    JSONObject result = NetworkClient.getJson(baseUrl,
-                            "/api/help/family-request?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
-                    JSONObject request = result.optJSONObject("request");
-                    if (request != null && "pending".equals(request.optString("status", "pending"))) {
-                        AssistNotifier.handleFamilyAssistRequest(this, request);
-                    }
+                    pollElderMembership(baseUrl, pairCode, authToken);
                 }
             } catch (Exception ignored) {
             } finally {
@@ -112,23 +102,181 @@ public class FamilyInviteMonitorService extends Service {
                 "/api/account/me?accountToken=" + encoded(accountToken));
         JSONArray memberships = account.optJSONArray("memberships");
         if (memberships == null) return;
-        String handledId = prefs.getString("handledFamilyHelpInvitationId", "");
         for (int index = 0; index < memberships.length(); index++) {
             JSONObject membership = memberships.optJSONObject(index);
             if (membership == null || !"family".equals(membership.optString("role", ""))) continue;
             String membershipPairCode = membership.optString("pairCode", "");
             String membershipAuthToken = membership.optString("authToken", "");
             if (membershipPairCode.isEmpty() || membershipAuthToken.isEmpty()) continue;
+            pollFamilyMembership(baseUrl, membershipPairCode, membershipAuthToken);
+        }
+    }
+
+    private void pollFamilyMembership(String baseUrl, String pairCode, String authToken) throws Exception {
+        JSONObject state = NetworkClient.getJson(baseUrl,
+                "/api/help?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
+        JSONObject invitation = state.optJSONObject("helpInvitation");
+        if (invitation != null) {
+            String invitationState = invitation.optString("status", "pending");
+            if ("pending".equals(invitationState)) {
+                invitation.put("membershipPairCode", pairCode);
+                invitation.put("membershipAuthToken", authToken);
+                AssistNotifier.handleHelpInvite(this, invitation);
+            } else if (("cancelled".equals(invitationState) || "expired".equals(invitationState))
+                    && isRecent(invitation.optString("updatedAt", ""))) {
+                AssistNotifier.handlePeerEvent(this,
+                        "help-invite-" + invitation.optString("id", "") + "-" + invitationState,
+                        "求助请求已结束",
+                        "长辈已取消求助，或请求已超时。无需继续等待。 ");
+            }
+        }
+        JSONObject request = state.optJSONObject("familyAssistRequest");
+        if (request != null && isRecent(request.optString("updatedAt", ""))) {
+            String requestState = request.optString("status", "");
+            String elderName = request.optString("elderName", "长辈");
+            if ("accepted".equals(requestState)) {
+                notifyRequestResult(request, requestState, elderName + "已同意协助", "正在等待对方确认屏幕共享。 ");
+            } else if ("declined".equals(requestState)) {
+                notifyRequestResult(request, requestState, elderName + "暂时不需要协助", "可以稍后再次发起请求。 ");
+            } else if ("expired".equals(requestState)) {
+                notifyRequestResult(request, requestState, "协助请求已超时", "对方暂未回应，可以重新发起。 ");
+            }
+        }
+        if (state.optBoolean("active", false)
+                && state.optBoolean("targetedForCurrent", false)
+                && state.optBoolean("helperIsCurrent", false)) {
+            AssistNotifier.handlePeerEvent(this,
+                    "assist-started-" + state.optString("sessionId", ""),
+                    state.optString("elderName", "长辈") + "已开始共享屏幕",
+                    "点这里进入亲情帮帮，开始本次协助。 ");
+        }
+        String controlDecision = state.optString("controlDecision", "idle");
+        String controlUpdatedAt = state.optString("controlUpdatedAt", "");
+        if (isRecent(controlUpdatedAt) && ("allowed".equals(controlDecision)
+                || "denied".equals(controlDecision) || "setup_required".equals(controlDecision))) {
+            String title = "allowed".equals(controlDecision) ? "长辈已允许远程操作"
+                    : ("setup_required".equals(controlDecision) ? "长辈尚未完成辅助服务设置" : "长辈未允许远程操作");
+            String message = "allowed".equals(controlDecision)
+                    ? "本次协助中可以使用远程操作。"
+                    : "你仍可继续查看屏幕和发送画圈提示。";
+            AssistNotifier.handlePeerEvent(this, "control-" + controlUpdatedAt + "-" + controlDecision, title, message);
+        }
+        if (!state.optBoolean("active", false)
+                && state.optBoolean("lastEndedForCurrent", false)
+                && "elder_ended".equals(state.optString("lastEndReason", ""))
+                && isRecent(state.optString("lastEndedAt", ""))) {
+            AssistNotifier.handlePeerEvent(this,
+                    "assist-ended-" + state.optString("lastEndedAt", ""),
+                    "长辈已结束本次求助",
+                    "屏幕共享和远程操作均已关闭。 ");
+        }
+    }
+
+    private void pollElderMembership(String baseUrl, String pairCode, String authToken) throws Exception {
+        JSONObject state = NetworkClient.getJson(baseUrl,
+                "/api/help?pairCode=" + encoded(pairCode) + "&authToken=" + encoded(authToken));
+        JSONObject request = state.optJSONObject("familyAssistRequest");
+        if (request != null) {
+            String requestState = request.optString("status", "pending");
+            if ("pending".equals(requestState)) {
+                AssistNotifier.handleFamilyAssistRequest(this, request);
+            } else if (("cancelled".equals(requestState) || "expired".equals(requestState))
+                    && isRecent(request.optString("updatedAt", ""))) {
+                AssistNotifier.handlePeerEvent(this,
+                        "family-request-" + request.optString("id", "") + "-" + requestState,
+                        "家属已取消协助请求",
+                        "这次请求已经结束，无需继续操作。 ");
+            }
+        }
+        JSONArray bindRequests = state.optJSONArray("pendingBindRequests");
+        if (bindRequests != null && bindRequests.length() > 0) {
+            JSONObject bindRequest = bindRequests.optJSONObject(0);
+            if (bindRequest != null) {
+                String requesterName = bindRequest.optString("requesterName", "家属");
+                AssistNotifier.handlePeerEvent(this,
+                        "bind-request-" + bindRequest.optString("id", ""),
+                        requesterName + "申请成为你的协助家人",
+                        "请打开亲情帮帮，确认是否同意本次绑定申请。 ");
+            }
+        }
+        JSONObject membershipEvent = state.optJSONObject("lastMembershipEvent");
+        if (membershipEvent != null
+                && "family_unbound".equals(membershipEvent.optString("type", ""))
+                && isRecent(membershipEvent.optString("updatedAt", ""))) {
+            AssistNotifier.handlePeerEvent(this,
+                    "membership-" + membershipEvent.optString("updatedAt", ""),
+                    membershipEvent.optString("name", "家属") + "已解除绑定",
+                    "对方将不再接收你的求助提醒。 ");
+        }
+        JSONObject invitation = state.optJSONObject("helpInvitation");
+        if (invitation != null && isRecent(invitation.optString("updatedAt", ""))) {
+            String invitationState = invitation.optString("status", "");
+            String helperName = invitation.optString("targetHelperName", "家属");
+            if ("accepted".equals(invitationState)) {
+                AssistNotifier.handlePeerEvent(this,
+                        "help-invite-" + invitation.optString("id", "") + "-accepted",
+                        helperName + "已接受求助",
+                        "请回到亲情帮帮，继续确认屏幕共享。 ");
+            } else if ("declined".equals(invitationState)) {
+                AssistNotifier.handlePeerEvent(this,
+                        "help-invite-" + invitation.optString("id", "") + "-declined",
+                        helperName + "暂时无法帮忙",
+                        "可以选择其他家人重新发起求助。 ");
+            } else if ("expired".equals(invitationState)) {
+                AssistNotifier.handlePeerEvent(this,
+                        "help-invite-" + invitation.optString("id", "") + "-expired",
+                        "求助请求已超时",
+                        "家属暂未回应，可以重新选择家人。 ");
+            }
+        }
+        if (state.optBoolean("controlRequested", false)) {
+            AssistNotifier.handleControlRequest(this, state);
+        }
+        if (!state.optBoolean("active", true)
+                && "family_ended".equals(state.optString("lastEndReason", ""))
+                && isRecent(state.optString("lastEndedAt", ""))) {
+            AssistNotifier.handleAssistEnded(this, state);
+        }
+    }
+
+    private void pollPendingBinding(String baseUrl, String accountToken, SharedPreferences prefs) {
+        String pendingToken = prefs.getString("pendingBindToken", "");
+        String pendingPairCode = prefs.getString("pendingBindPairCode", "");
+        if (accountToken.isEmpty() || pendingToken.isEmpty() || pendingPairCode.isEmpty()) return;
+        try {
             JSONObject result = NetworkClient.getJson(baseUrl,
-                    "/api/help/invite?pairCode=" + encoded(membershipPairCode)
-                            + "&authToken=" + encoded(membershipAuthToken));
-            JSONObject invitation = result.optJSONObject("invitation");
-            if (invitation == null || !"pending".equals(invitation.optString("status", "pending"))
-                    || handledId.equals(invitation.optString("id", ""))) continue;
-            invitation.put("membershipPairCode", membershipPairCode);
-            invitation.put("membershipAuthToken", membershipAuthToken);
-            AssistNotifier.handleHelpInvite(this, invitation);
-            return;
+                    "/api/bind/pending?pairCode=" + encoded(pendingPairCode)
+                            + "&pendingToken=" + encoded(pendingToken)
+                            + "&accountToken=" + encoded(accountToken));
+            if (result.optBoolean("approved", false)) {
+                AssistNotifier.handlePeerEvent(this,
+                        "bind-approved-" + pendingToken,
+                        "长辈已同意绑定",
+                        "现在可以在“家人”页面向长辈发起协助请求。 ");
+            } else if (result.optBoolean("rejected", false)) {
+                AssistNotifier.handlePeerEvent(this,
+                        "bind-rejected-" + pendingToken,
+                        "长辈未同意本次绑定",
+                        "如有需要，请与长辈确认后重新申请。 ");
+            }
+        } catch (Exception ignored) {
+            // Keep polling while the request is pending or the network is temporarily unavailable.
+        }
+    }
+
+    private void notifyRequestResult(JSONObject request, String state, String title, String message) {
+        AssistNotifier.handlePeerEvent(this,
+                "family-request-" + request.optString("id", "") + "-" + state,
+                title, message);
+    }
+
+    private boolean isRecent(String timestamp) {
+        if (timestamp == null || timestamp.isEmpty()) return false;
+        try {
+            long elapsed = System.currentTimeMillis() - Instant.parse(timestamp).toEpochMilli();
+            return elapsed >= 0 && elapsed <= 10 * 60 * 1000L;
+        } catch (Exception ignored) {
+            return false;
         }
     }
 
