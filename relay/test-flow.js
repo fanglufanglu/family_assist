@@ -317,6 +317,9 @@ async function run() {
     "screen sharing should start only after the elder accepts the relative's request");
   assert(familyInitiatedHelp.body.family.assistPhase === "active",
     "relay should expose one authoritative active assistance phase");
+  const elderHelpState = await get(`/api/help?pairCode=${securePairCode}&authToken=${secureInvite.body.authToken}`);
+  assert(elderHelpState.status === 200 && elderHelpState.body.active,
+    "elder event monitor should be able to read the shared assistance state");
   const activeElderStatus = await get(`/api/bind/status?pairCode=${securePairCode}&authToken=${secureInvite.body.authToken}`);
   assert(activeElderStatus.body.family.active
     && activeElderStatus.body.family.activeHelperRef === relativesStatus.body.family.familyMembers[0].ref,
@@ -438,6 +441,11 @@ async function run() {
 
   const rightEnd = await post("/api/family/end", { pairCode, authToken: first.body.authToken, sessionId });
   assert(rightEnd.status === 200, "active relative should end the session");
+  const repeatedFamilyEnd = await post("/api/family/end", {
+    pairCode, authToken: first.body.authToken, sessionId,
+  });
+  assert(repeatedFamilyEnd.status === 200 && repeatedFamilyEnd.body.stale,
+    "a repeated family end should be idempotent for the active relative");
   const endedState = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
   const unrelatedEndedState = await get(`/api/help?pairCode=${pairCode}&authToken=${second.body.authToken}`);
   assert(!endedState.body.active && !endedState.body.controlAllowed && endedState.body.lastEndedForCurrent,
@@ -458,22 +466,43 @@ async function run() {
   assert(heartbeat.status === 200 && heartbeat.body.family.active,
     "elder heartbeat should keep the current session active");
   await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
+  const elderEnd = await post("/api/end", {
+    pairCode, authToken: elderToken, sessionId: nextHelp.body.sessionId,
+  });
+  assert(elderEnd.status === 200, "elder should end the active session");
+  const duplicateElderEnd = await post("/api/end", {
+    pairCode, authToken: elderToken, sessionId: nextHelp.body.sessionId,
+  });
+  assert(duplicateElderEnd.status === 200 && duplicateElderEnd.body.stale,
+    "a repeated elder end should be idempotent");
+  const elderEndedState = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
+  assert(elderEndedState.body.lastEndedForCurrent
+      && elderEndedState.body.lastEndReason === "elder_ended",
+    "a repeated elder end must preserve the assisting relative recipient");
+
+  const thirdHelp = await startAcceptedHelp({
+    pairCode,
+    elderToken,
+    familyToken: first.body.authToken,
+    targetHelperRef: firstRelative.ref,
+  });
+  assert(thirdHelp.status === 200, "elder should start another session after ending");
   const staleAnnotation = await post("/api/annotation", {
     pairCode,
     authToken: first.body.authToken,
-    sessionId,
+    sessionId: nextHelp.body.sessionId,
     x: 0.5,
     y: 0.5,
   });
   assert(staleAnnotation.status === 409, "an annotation from an old session must be rejected");
   const offer = await post("/api/webrtc/offer", {
-    pairCode, authToken: elderToken, sessionId: nextHelp.body.sessionId, type: "offer", sdp: "offer-sdp",
+    pairCode, authToken: elderToken, sessionId: thirdHelp.body.sessionId, type: "offer", sdp: "offer-sdp",
   });
   assert(offer.status === 200, "elder WebRTC offer should be accepted");
   const relayedOffer = await get(`/api/webrtc/offer?pairCode=${pairCode}&authToken=${first.body.authToken}`);
   assert(relayedOffer.body.offer.sdp === "offer-sdp", "family should receive the current offer");
   const answer = await post("/api/webrtc/answer", {
-    pairCode, authToken: first.body.authToken, sessionId: nextHelp.body.sessionId, type: "answer", sdp: "answer-sdp",
+    pairCode, authToken: first.body.authToken, sessionId: thirdHelp.body.sessionId, type: "answer", sdp: "answer-sdp",
   });
   assert(answer.status === 200, "family WebRTC answer should be accepted");
   const relayedAnswer = await get(`/api/webrtc/answer?pairCode=${pairCode}&authToken=${elderToken}`);
@@ -481,8 +510,8 @@ async function run() {
   const staleEnd = await post("/api/end", { pairCode, authToken: elderToken, sessionId });
   assert(staleEnd.body.stale, "an old session must not end a newer session");
   const stillActive = await get(`/api/help?pairCode=${pairCode}&authToken=${first.body.authToken}`);
-  assert(stillActive.body.active && stillActive.body.sessionId === nextHelp.body.sessionId, "new session should survive stale end requests");
-  const finalEnd = await post("/api/end", { pairCode, authToken: elderToken, sessionId: nextHelp.body.sessionId });
+  assert(stillActive.body.active && stillActive.body.sessionId === thirdHelp.body.sessionId, "new session should survive stale end requests");
+  const finalEnd = await post("/api/end", { pairCode, authToken: elderToken, sessionId: thirdHelp.body.sessionId });
   assert(finalEnd.status === 200 && !finalEnd.body.stale, "elder should end the current session");
   const abandonedHelp = await startAcceptedHelp({
     pairCode,

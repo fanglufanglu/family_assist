@@ -13,6 +13,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.util.Log;
 
 import org.json.JSONObject;
 import org.json.JSONArray;
@@ -24,6 +25,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class FamilyInviteMonitorService extends Service {
+    private static final String TAG = "FamilyInviteMonitor";
     private static final String PREFS = "family-assist";
     private static final String CHANNEL_ID = "family_invite_monitor";
     private static final int NOTIFICATION_ID = 3010;
@@ -90,7 +92,8 @@ public class FamilyInviteMonitorService extends Service {
                 } else if ("elder".equals(role) && !pairCode.isEmpty() && !authToken.isEmpty()) {
                     pollElderMembership(baseUrl, pairCode, authToken);
                 }
-            } catch (Exception ignored) {
+            } catch (Exception error) {
+                Log.w(TAG, "Cross-device event polling failed", error);
             } finally {
                 polling = false;
             }
@@ -161,14 +164,18 @@ public class FamilyInviteMonitorService extends Service {
                     : "你仍可继续查看屏幕和发送画圈提示。";
             AssistNotifier.handlePeerEvent(this, "control-" + controlUpdatedAt + "-" + controlDecision, title, message);
         }
+        String endReason = state.optString("lastEndReason", "");
         if (!state.optBoolean("active", false)
                 && state.optBoolean("lastEndedForCurrent", false)
-                && "elder_ended".equals(state.optString("lastEndReason", ""))
+                && ("elder_ended".equals(endReason) || "elder_disconnected".equals(endReason))
                 && isRecent(state.optString("lastEndedAt", ""))) {
+            boolean disconnected = "elder_disconnected".equals(endReason);
             AssistNotifier.handlePeerEvent(this,
                     "assist-ended-" + state.optString("lastEndedAt", ""),
-                    "长辈已结束本次求助",
-                    "屏幕共享和远程操作均已关闭。 ");
+                    disconnected ? "协助连接已断开" : "长辈已结束本次求助",
+                    disconnected
+                            ? "长辈的屏幕共享已停止，可以稍后重新发起协助。"
+                            : "屏幕共享和远程操作均已关闭。 ");
         }
     }
 

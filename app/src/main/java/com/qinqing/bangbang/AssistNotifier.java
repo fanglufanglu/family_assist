@@ -13,6 +13,7 @@ import android.content.pm.PackageManager;
 import android.media.RingtoneManager;
 import android.os.Build;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 final class AssistNotifier {
@@ -280,16 +281,37 @@ final class AssistNotifier {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String seenKey = "peerEventSeen_" + Integer.toHexString(eventKey.hashCode());
         if (prefs.getBoolean(seenKey, false)) return;
-        String pending = prefs.getString("pendingPeerEvent", "");
-        if (!pending.isEmpty()) return;
         try {
+            JSONArray queue = pendingPeerEvents(prefs);
+            if (eventKey.startsWith("assist-ended-")) {
+                // A terminal event makes earlier session updates obsolete, but
+                // account and binding messages must remain visible.
+                JSONArray relevant = new JSONArray();
+                for (int index = 0; index < queue.length(); index++) {
+                    JSONObject item = queue.optJSONObject(index);
+                    String queuedKey = item == null ? "" : item.optString("key", "");
+                    if (!queuedKey.startsWith("assist-started-")
+                            && !queuedKey.startsWith("control-")) {
+                        relevant.put(item);
+                    }
+                }
+                queue = relevant;
+            }
+            while (queue.length() >= 8) {
+                JSONArray trimmed = new JSONArray();
+                for (int index = 1; index < queue.length(); index++) {
+                    trimmed.put(queue.optJSONObject(index));
+                }
+                queue = trimmed;
+            }
+            queue.put(new JSONObject()
+                    .put("key", eventKey)
+                    .put("title", title)
+                    .put("message", message));
             prefs.edit()
                     .putBoolean(seenKey, true)
-                    .putString("pendingPeerEvent", new JSONObject()
-                            .put("key", eventKey)
-                            .put("title", title)
-                            .put("message", message)
-                            .toString())
+                    .putString("pendingPeerEvents", queue.toString())
+                    .remove("pendingPeerEvent")
                     .commit();
         } catch (Exception ignored) {
             return;
@@ -297,6 +319,17 @@ final class AssistNotifier {
         if (isAppUiForeground(context)) return;
         showPeerEventNotification(context, title, message);
         showUrgentOverlay(context, title, message, "peer-event:" + eventKey);
+    }
+
+    static JSONArray pendingPeerEvents(SharedPreferences prefs) {
+        try {
+            JSONArray queue = new JSONArray(prefs.getString("pendingPeerEvents", "[]"));
+            String legacy = prefs.getString("pendingPeerEvent", "");
+            if (!legacy.isEmpty()) queue.put(new JSONObject(legacy));
+            return queue;
+        } catch (Exception ignored) {
+            return new JSONArray();
+        }
     }
 
     private static void showPeerEventNotification(Context context, String title, String message) {

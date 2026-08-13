@@ -4315,30 +4315,50 @@ public class MainActivity extends Activity {
 
     private void maybeShowPeerEvent() {
         if (!appInForeground || peerEventPromptShowing || isFinishing()) return;
-        String raw = prefs.getString("pendingPeerEvent", "");
-        if (raw.isEmpty()) return;
         try {
-            JSONObject event = new JSONObject(raw);
+            JSONArray queue = AssistNotifier.pendingPeerEvents(prefs);
+            if (queue.length() == 0) return;
+            JSONObject event = queue.optJSONObject(0);
+            if (event == null) {
+                prefs.edit().remove("pendingPeerEvents").remove("pendingPeerEvent").apply();
+                return;
+            }
             String key = event.optString("key", "");
             if (key.isEmpty() || key.equals(prefs.getString("handledPeerEventKey", ""))) {
-                prefs.edit().remove("pendingPeerEvent").apply();
+                removeFirstPeerEvent(queue);
+                main.post(this::maybeShowPeerEvent);
                 return;
             }
             peerEventPromptShowing = true;
-            prefs.edit()
-                    .putString("handledPeerEventKey", key)
-                    .remove("pendingPeerEvent")
-                    .apply();
+            removeFirstPeerEvent(queue);
+            prefs.edit().putString("handledPeerEventKey", key).apply();
             AssistNotifier.cancelPeerEventNotification(this);
             new AlertDialog.Builder(this)
                     .setTitle(event.optString("title", "协助状态已更新"))
                     .setMessage(event.optString("message", "请查看当前协助状态。"))
-                    .setPositiveButton("知道了", (dialog, which) -> peerEventPromptShowing = false)
-                    .setOnCancelListener(dialog -> peerEventPromptShowing = false)
+                    .setPositiveButton("知道了", (dialog, which) -> finishPeerEventPrompt())
+                    .setOnCancelListener(dialog -> finishPeerEventPrompt())
                     .show();
         } catch (Exception ignored) {
-            prefs.edit().remove("pendingPeerEvent").apply();
+            prefs.edit().remove("pendingPeerEvents").remove("pendingPeerEvent").apply();
         }
+    }
+
+    private void removeFirstPeerEvent(JSONArray queue) {
+        JSONArray remaining = new JSONArray();
+        for (int index = 1; index < queue.length(); index++) {
+            JSONObject item = queue.optJSONObject(index);
+            if (item != null) remaining.put(item);
+        }
+        prefs.edit()
+                .putString("pendingPeerEvents", remaining.toString())
+                .remove("pendingPeerEvent")
+                .apply();
+    }
+
+    private void finishPeerEventPrompt() {
+        peerEventPromptShowing = false;
+        main.postDelayed(this::maybeShowPeerEvent, 180);
     }
 
     private void handleRemoteControlRequest(String updatedAt) {

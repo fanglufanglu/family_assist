@@ -1687,18 +1687,21 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/api/help") {
       const pairCode = String(url.searchParams.get("pairCode") || "").trim();
       const authToken = String(url.searchParams.get("authToken") || "").trim();
-      const result = requireMember(res, pairCode, authToken, "family");
+      const result = requireMember(res, pairCode, authToken);
       if (!result) return;
       const currentHelperRef = memberReference(authToken, result.member);
-      const targetedForCurrent = !result.family.targetHelperRef || result.family.targetHelperRef === currentHelperRef;
-      if (result.family.active && targetedForCurrent && !result.family.activeHelperToken) {
-        result.family.activeHelperToken = authToken;
-        result.family.activeHelperName = result.member.name || "家属";
-        audit(result.family, "family_joined", { name: result.family.activeHelperName, sessionId: result.family.sessionId });
-      }
-      if (result.family.activeHelperToken === authToken) {
-        result.family.lastFamilySeenAtMs = Date.now();
-        result.family.lastFamilySeenAt = new Date(result.family.lastFamilySeenAtMs).toISOString();
+      if (result.member.role === "family") {
+        const targetedForCurrent = !result.family.targetHelperRef
+          || result.family.targetHelperRef === currentHelperRef;
+        if (result.family.active && targetedForCurrent && !result.family.activeHelperToken) {
+          result.family.activeHelperToken = authToken;
+          result.family.activeHelperName = result.member.name || "家属";
+          audit(result.family, "family_joined", { name: result.family.activeHelperName, sessionId: result.family.sessionId });
+        }
+        if (result.family.activeHelperToken === authToken) {
+          result.family.lastFamilySeenAtMs = Date.now();
+          result.family.lastFamilySeenAt = new Date(result.family.lastFamilySeenAtMs).toISOString();
+        }
       }
       sendJson(res, 200, publicFamily(result.family, result.member, authToken));
       return;
@@ -1711,6 +1714,16 @@ const server = http.createServer(async (req, res) => {
       const result = requireMember(res, pairCode, authToken, "elder");
       if (!result) return;
       const sessionId = String(payload.sessionId || "").trim();
+      // CaptureService, WebRTC and the activity can all observe the same stop.
+      // Keep the first end result intact so retries cannot erase its recipient.
+      if (!result.family.active) {
+        sendJson(res, 200, {
+          ok: true,
+          stale: true,
+          family: publicFamily(result.family, result.member, authToken),
+        });
+        return;
+      }
       if (result.family.active && (!sessionId || sessionId !== result.family.sessionId)) {
         sendJson(res, 200, { ok: true, stale: true });
         return;
@@ -1727,6 +1740,16 @@ const server = http.createServer(async (req, res) => {
       const authToken = String(payload.authToken || "").trim();
       const result = requireMember(res, pairCode, authToken, "family");
       if (!result) return;
+      if (!result.family.active
+          && result.family.lastEndReason === "family_ended"
+          && result.family.lastEndedHelperRef === memberReference(authToken, result.member)) {
+        sendJson(res, 200, {
+          ok: true,
+          stale: true,
+          family: publicFamily(result.family, result.member, authToken),
+        });
+        return;
+      }
       if (!requireActiveHelper(res, result, authToken)) return;
       const sessionId = String(payload.sessionId || "").trim();
       if (!sessionId || sessionId !== result.family.sessionId) {
