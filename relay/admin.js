@@ -376,7 +376,7 @@ function publicId(value) {
 }
 
 function randomToken() {
-  return crypto.randomBytes(32).toString("base64url");
+  return base64Url(crypto.randomBytes(32));
 }
 
 function safeEqual(left, right) {
@@ -388,8 +388,17 @@ function safeEqual(left, right) {
 function verifyPasswordHash(password, stored) {
   const parts = String(stored || "").split("$");
   if (parts.length !== 4 || parts[0] !== "pbkdf2_sha256") return false;
-  const actual = crypto.pbkdf2Sync(String(password), parts[2], Number(parts[1]), 32, "sha256").toString("base64url");
+  const iterations = Number(parts[1]);
+  if (!Number.isSafeInteger(iterations) || iterations < 100000 || iterations > 2000000) return false;
+  const actual = base64Url(crypto.pbkdf2Sync(String(password), parts[2], iterations, 32, "sha256"));
   return safeEqual(actual, parts[3]);
+}
+
+function base64Url(buffer) {
+  return buffer.toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
 }
 
 function parseCookies(header) {

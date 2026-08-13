@@ -10,7 +10,7 @@ document.getElementById("endForm").addEventListener("submit",submitEnd);
 boot();
 
 async function boot(){try{const me=await api("/admin/api/me");showApp(me)}catch(_){showLogin()}}
-async function login(event){event.preventDefault();const form=new FormData(event.currentTarget);const error=document.getElementById("loginError");error.hidden=true;try{const result=await api("/admin/api/login",{method:"POST",body:{username:form.get("username"),password:form.get("password")}});showApp(result)}catch(e){error.textContent=e.status===429?"尝试次数过多，请稍后再试。":"账号或密码不正确。";error.hidden=false}}
+async function login(event){event.preventDefault();const form=new FormData(event.currentTarget);const error=document.getElementById("loginError");error.hidden=true;try{const result=await api("/admin/api/login",{method:"POST",body:{username:form.get("username"),password:form.get("password")}});showApp(result)}catch(e){error.textContent=e.status===429?"尝试次数过多，请稍后再试。":e.status===403?"账号或密码不正确。":"管理服务暂时不可用，请稍后重试。";error.hidden=false}}
 function showApp(result){state.csrf=result.csrf;document.getElementById("adminName").textContent=result.user.username;document.getElementById("loginView").hidden=true;document.getElementById("appView").hidden=false;loadView()}
 function showLogin(){document.getElementById("appView").hidden=true;document.getElementById("loginView").hidden=false}
 async function logout(){try{await api("/admin/api/logout",{method:"POST",body:{}})}finally{state.csrf="";showLogin()}}
