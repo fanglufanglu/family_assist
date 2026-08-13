@@ -32,6 +32,16 @@ if [[ -n "${ADMIN_PASSWORD}" && ${#ADMIN_PASSWORD} -lt 12 ]]; then
   exit 1
 fi
 
+if [[ -n "${ADMIN_PASSWORD}" && ( "${ADMIN_PASSWORD}" == "${TURN_PASSWORD}" || "${ADMIN_PASSWORD}" == "${DB_PASSWORD}" ) ]]; then
+  echo "ADMIN_PASSWORD must be different from TURN_PASSWORD and DB_PASSWORD."
+  exit 1
+fi
+
+if [[ -n "${DB_PASSWORD}" && "${TURN_PASSWORD}" == "${DB_PASSWORD}" ]]; then
+  echo "TURN_PASSWORD must be different from DB_PASSWORD."
+  exit 1
+fi
+
 if [[ "$(id -u)" != "0" ]]; then
   echo "Please run as root."
   exit 1

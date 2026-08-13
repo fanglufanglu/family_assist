@@ -55,6 +55,8 @@ LE_EMAIL='证书到期通知邮箱' bash scripts/enable-aliyun-ip-https.sh
 
 管理后台位于 `https://服务器地址/admin/`。`ADMIN_PASSWORD` 至少 12 位，必须与 TURN、PostgreSQL 及 APP 账号密码不同，生产环境建议使用至少 20 位随机字符。后台只展示脱敏业务数据，不提供用户屏幕、密码、账号令牌和完整手机号。
 
+管理员、TURN 和 PostgreSQL 必须分别使用三个不同密码，不能复用。推荐在服务器上使用 `openssl rand -hex 24` 分别生成，避免特殊字符进入连接字符串后需要额外转义。
+
 ## PostgreSQL 与每日备份
 
 账号体系、亲属关系和审计记录正式化后，建议准备 PostgreSQL。当前脚本会安装 PostgreSQL、创建数据库、导入表结构，并配置每天凌晨 03:17 自动备份，备份保留 14 天。
