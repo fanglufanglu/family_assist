@@ -31,6 +31,7 @@ import android.text.InputType;
 import android.text.style.ForegroundColorSpan;
 import android.text.style.RelativeSizeSpan;
 import android.text.style.StyleSpan;
+import android.util.Log;
 import android.view.inputmethod.EditorInfo;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -65,6 +66,7 @@ import java.util.concurrent.Executors;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
+    private static final String TAG = "FamilyAssist";
     private static final int REQUEST_CAPTURE = 2001;
     private static final int REQUEST_NOTIFICATIONS = 2002;
     private static final int REQUEST_FAMILY_NOTIFICATIONS = 2003;
@@ -277,7 +279,9 @@ public class MainActivity extends Activity {
         seedDefaultSafetyPrefs();
         createControlNotificationChannel();
         boolean openFamilyHelpInvite = getIntent().getBooleanExtra("openFamilyHelpInvite", false);
-        if (isLoggedIn()) {
+        if (isLoggedIn() && CrashReporter.consumeStartupRecovery(this)) {
+            showStartupRecovery();
+        } else if (isLoggedIn()) {
             refreshAccountBeforeRouting(openFamilyHelpInvite);
         } else {
             showSetup();
@@ -505,6 +509,21 @@ public class MainActivity extends Activity {
         root.addView(familyCard);
 
         root.addView(status);
+        setContentView(scroll(root));
+    }
+
+    private void showStartupRecovery() {
+        currentPage = "startupRecovery";
+        root = verticalRoot();
+        root.addView(appBrandHeader("应用已恢复"));
+        root.addView(card("上次运行意外中断", "为避免反复退出，本次没有自动恢复后台提醒。你可以重新进入；如果仍有问题，可先退出当前账号。"));
+
+        Button retryButton = primaryButton("重新进入");
+        retryButton.setOnClickListener(v -> refreshAccountBeforeRouting(false));
+        Button logoutButton = secondaryButton("退出当前账号");
+        logoutButton.setOnClickListener(v -> logoutLocal());
+        root.addView(retryButton);
+        root.addView(logoutButton);
         setContentView(scroll(root));
     }
 
@@ -1890,10 +1909,17 @@ public class MainActivity extends Activity {
 
     private void startFamilyInviteMonitor() {
         Intent intent = new Intent(this, FamilyInviteMonitorService.class);
-        if (Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(intent);
-        } else {
-            startService(intent);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
+        } catch (RuntimeException error) {
+            Log.e(TAG, "Unable to start family event monitor", error);
+            if (status != null) {
+                setStatus("系统暂时无法开启后台提醒。你仍可在亲情帮帮内正常使用协助功能。");
+            }
         }
     }
 

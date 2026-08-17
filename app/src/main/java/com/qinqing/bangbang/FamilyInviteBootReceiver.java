@@ -5,8 +5,11 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Build;
+import android.util.Log;
 
 public class FamilyInviteBootReceiver extends BroadcastReceiver {
+    private static final String TAG = "FamilyInviteBoot";
+
     @Override
     public void onReceive(Context context, Intent intent) {
         if (!Intent.ACTION_BOOT_COMPLETED.equals(intent.getAction())) return;
@@ -19,10 +22,14 @@ public class FamilyInviteBootReceiver extends BroadcastReceiver {
             return;
         }
         Intent service = new Intent(context, FamilyInviteMonitorService.class);
-        if (Build.VERSION.SDK_INT >= 26) {
-            context.startForegroundService(service);
-        } else {
-            context.startService(service);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                context.startForegroundService(service);
+            } else {
+                context.startService(service);
+            }
+        } catch (RuntimeException error) {
+            Log.e(TAG, "Unable to restore family event monitor after boot", error);
         }
     }
 }

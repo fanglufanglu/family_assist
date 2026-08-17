@@ -13,12 +13,15 @@ import java.io.StringWriter;
 final class CrashReporter {
     private static final String PREFS = "family-assist";
     private static final String PENDING_CRASH = "pendingCrashReport";
+    private static final String RECOVERY_PENDING = "startupRecoveryPending";
+    private static final String RECOVERY_SOURCE = "startupRecoverySource";
 
     private CrashReporter() {
     }
 
     static void install(Context context) {
         Context appContext = context.getApplicationContext();
+        markStartupRecoveryIfNeeded(appContext);
         Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((thread, error) -> {
             saveCrash(appContext, thread, error);
@@ -28,6 +31,31 @@ final class CrashReporter {
             }
         });
         uploadPendingAsync(appContext);
+    }
+
+    static boolean consumeStartupRecovery(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (!prefs.getBoolean(RECOVERY_PENDING, false)) {
+            return false;
+        }
+        prefs.edit().remove(RECOVERY_PENDING).commit();
+        return true;
+    }
+
+    private static void markStartupRecoveryIfNeeded(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        String pending = prefs.getString(PENDING_CRASH, "");
+        if (pending.isEmpty()) {
+            return;
+        }
+        String source = Integer.toHexString(pending.hashCode());
+        if (source.equals(prefs.getString(RECOVERY_SOURCE, ""))) {
+            return;
+        }
+        prefs.edit()
+                .putBoolean(RECOVERY_PENDING, true)
+                .putString(RECOVERY_SOURCE, source)
+                .commit();
     }
 
     static void uploadPendingAsync(Context context) {
@@ -42,7 +70,8 @@ final class CrashReporter {
                     .put("thread", thread == null ? "" : thread.getName())
                     .put("message", error == null ? "" : error.getClass().getName() + ": " + error.getMessage())
                     .put("stack", stackTrace(error));
-            prefs.edit().putString(PENDING_CRASH, payload.toString()).apply();
+            // A crashing process may be killed immediately after this handler returns.
+            prefs.edit().putString(PENDING_CRASH, payload.toString()).commit();
         } catch (Exception ignored) {
         }
     }

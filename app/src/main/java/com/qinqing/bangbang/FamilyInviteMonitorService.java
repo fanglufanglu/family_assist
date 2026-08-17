@@ -34,6 +34,7 @@ public class FamilyInviteMonitorService extends Service {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService io = Executors.newSingleThreadExecutor();
     private boolean polling;
+    private boolean foregroundReady;
 
     private final Runnable pollLoop = new Runnable() {
         @Override
@@ -46,15 +47,17 @@ public class FamilyInviteMonitorService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        createChannel();
-        promoteToForeground();
+        foregroundReady = promoteToForegroundSafely();
+        if (!foregroundReady) {
+            stopSelf();
+            return;
+        }
         main.post(pollLoop);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        promoteToForeground();
-        return START_STICKY;
+        return foregroundReady ? START_STICKY : START_NOT_STICKY;
     }
 
     @Override
@@ -314,6 +317,17 @@ public class FamilyInviteMonitorService extends Service {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING);
         } else {
             startForeground(NOTIFICATION_ID, notification);
+        }
+    }
+
+    private boolean promoteToForegroundSafely() {
+        try {
+            createChannel();
+            promoteToForeground();
+            return true;
+        } catch (RuntimeException error) {
+            Log.e(TAG, "Foreground family monitor is unavailable on this device", error);
+            return false;
         }
     }
 
