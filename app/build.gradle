@@ -2,6 +2,34 @@ plugins {
     id "com.android.application"
 }
 
+def signingProperties = new Properties()
+def signingPropertiesFile = rootProject.file("keystore.properties")
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.withInputStream { signingProperties.load(it) }
+}
+
+def signingValue = { String name ->
+    signingProperties.getProperty(name) ?: System.getenv(name)
+}
+def releaseStoreFile = signingValue("FAMILY_ASSIST_STORE_FILE")
+def releaseStorePassword = signingValue("FAMILY_ASSIST_STORE_PASSWORD")
+def releaseKeyAlias = signingValue("FAMILY_ASSIST_KEY_ALIAS")
+def releaseKeyPassword = signingValue("FAMILY_ASSIST_KEY_PASSWORD")
+def releaseSigningConfigured = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+def releaseRequested = gradle.startParameter.taskNames.any { it.toLowerCase().contains("release") }
+
+if (releaseRequested && !releaseSigningConfigured) {
+    throw new GradleException("Release signing is not configured. Copy keystore.properties.example to keystore.properties and fill in the private values.")
+}
+
+if (!releaseSigningConfigured) {
+    gradle.taskGraph.whenReady { graph ->
+        if (graph.allTasks.any { it.name.toLowerCase().contains("release") }) {
+            throw new GradleException("A Release task was selected without the private signing configuration.")
+        }
+    }
+}
+
 android {
     namespace "com.qinqing.bangbang"
     compileSdk 35
@@ -14,9 +42,24 @@ android {
         versionName "0.3.1"
     }
 
+    signingConfigs {
+        release {
+            if (releaseSigningConfigured) {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+                enableV4Signing true
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig signingConfigs.debug
+            signingConfig releaseSigningConfigured ? signingConfigs.release : null
             minifyEnabled false
         }
     }

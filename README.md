@@ -47,7 +47,11 @@ npm run test:relay
 ./gradlew assembleDebug assembleRelease
 ```
 
-Debug 构建允许通过 ADB 把 `baseUrl` 指向本机服务；Release 构建仅允许 HTTPS。屏幕共享、悬浮窗、无障碍和厂商后台通知策略仍应在多品牌真机上完成发布前验收。
+Release 构建必须使用正式开发者证书。首次构建前复制
+`keystore.properties.example` 为 `keystore.properties` 并填写本机私有签名信息；
+密钥、口令和真实配置文件不得提交到 Git。后续发布必须持续使用同一证书，否则已安装用户无法覆盖升级。
+
+Debug 构建允许通过 ADB 把 `baseUrl` 指向本机服务；当前 Release 仅对白名单 ECS IP 临时放行 HTTP。屏幕共享、悬浮窗、无障碍和厂商后台通知策略仍应在多品牌真机上完成发布前验收。
 
 ## 忘记密码短信
 
