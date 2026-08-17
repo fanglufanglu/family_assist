@@ -82,6 +82,7 @@ public class MainActivity extends Activity {
     private static final long RTC_STALE_FRAME_MS = 3200;
     private static final long RTC_FRAME_SAMPLE_MS = 180;
     private static final String PREF_ASSIST_SESSION_ID = "assistSessionId";
+    private static final String PREF_MONITOR_SAFE_MODE = "familyMonitorSafeMode";
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService statusIo = Executors.newSingleThreadExecutor();
@@ -514,9 +515,15 @@ public class MainActivity extends Activity {
 
     private void showStartupRecovery() {
         currentPage = "startupRecovery";
+        prefs.edit().putBoolean(PREF_MONITOR_SAFE_MODE, true).commit();
         root = verticalRoot();
         root.addView(appBrandHeader("应用已恢复"));
-        root.addView(card("上次运行意外中断", "为避免反复退出，本次没有自动恢复后台提醒。你可以重新进入；如果仍有问题，可先退出当前账号。"));
+        String crashSummary = CrashReporter.startupRecoverySummary(this);
+        String recoveryMessage = "为避免反复退出，已暂停此设备的后台常驻提醒。重新进入后仍可正常使用应用内协助功能。";
+        if (!crashSummary.isEmpty()) {
+            recoveryMessage += "\n\n诊断信息：" + crashSummary;
+        }
+        root.addView(card("上次运行意外中断", recoveryMessage));
 
         Button retryButton = primaryButton("重新进入");
         retryButton.setOnClickListener(v -> refreshAccountBeforeRouting(false));
@@ -1908,15 +1915,18 @@ public class MainActivity extends Activity {
     }
 
     private void startFamilyInviteMonitor() {
+        if (shouldUseInAppEventPollingOnly()) {
+            Log.w(TAG, "Persistent family monitor disabled for device compatibility");
+            return;
+        }
         Intent intent = new Intent(this, FamilyInviteMonitorService.class);
         try {
-            if (Build.VERSION.SDK_INT >= 26) {
-                startForegroundService(intent);
-            } else {
-                startService(intent);
-            }
+            // Called only while this Activity is visible. The service promotes itself
+            // immediately, without exposing the process to the FGS five-second timeout.
+            startService(intent);
         } catch (RuntimeException error) {
             Log.e(TAG, "Unable to start family event monitor", error);
+            prefs.edit().putBoolean(PREF_MONITOR_SAFE_MODE, true).commit();
             if (status != null) {
                 setStatus("系统暂时无法开启后台提醒。你仍可在亲情帮帮内正常使用协助功能。");
             }
@@ -1924,12 +1934,23 @@ public class MainActivity extends Activity {
     }
 
     private void ensureFamilyInviteNotifications() {
+        if (shouldUseInAppEventPollingOnly()) {
+            return;
+        }
         if (Build.VERSION.SDK_INT >= 33
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_FAMILY_NOTIFICATIONS);
             return;
         }
         startFamilyInviteMonitor();
+    }
+
+    private boolean shouldUseInAppEventPollingOnly() {
+        if (prefs.getBoolean(PREF_MONITOR_SAFE_MODE, false)) {
+            return true;
+        }
+        String vendor = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase(Locale.ROOT);
+        return vendor.contains("vivo") || vendor.contains("iqoo");
     }
 
     private void maybeShowFamilyHelpInvitation() {

@@ -15,6 +15,7 @@ final class CrashReporter {
     private static final String PENDING_CRASH = "pendingCrashReport";
     private static final String RECOVERY_PENDING = "startupRecoveryPending";
     private static final String RECOVERY_SOURCE = "startupRecoverySource";
+    private static final String RECOVERY_SUMMARY = "startupRecoverySummary";
 
     private CrashReporter() {
     }
@@ -42,6 +43,11 @@ final class CrashReporter {
         return true;
     }
 
+    static String startupRecoverySummary(Context context) {
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(RECOVERY_SUMMARY, "");
+    }
+
     private static void markStartupRecoveryIfNeeded(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         String pending = prefs.getString(PENDING_CRASH, "");
@@ -52,9 +58,18 @@ final class CrashReporter {
         if (source.equals(prefs.getString(RECOVERY_SOURCE, ""))) {
             return;
         }
+        String summary = "";
+        try {
+            summary = new JSONObject(pending).optString("message", "");
+        } catch (Exception ignored) {
+        }
+        if (summary.length() > 220) {
+            summary = summary.substring(0, 220);
+        }
         prefs.edit()
                 .putBoolean(RECOVERY_PENDING, true)
                 .putString(RECOVERY_SOURCE, source)
+                .putString(RECOVERY_SUMMARY, summary)
                 .commit();
     }
 

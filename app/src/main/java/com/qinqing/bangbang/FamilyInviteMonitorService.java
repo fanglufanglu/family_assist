@@ -52,12 +52,25 @@ public class FamilyInviteMonitorService extends Service {
             stopSelf();
             return;
         }
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        String vendor = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase(java.util.Locale.ROOT);
+        if (prefs.getBoolean("familyMonitorSafeMode", false)
+                || vendor.contains("vivo") || vendor.contains("iqoo")) {
+            Log.w(TAG, "Persistent monitor disabled for device compatibility");
+            if (Build.VERSION.SDK_INT >= 24) {
+                stopForeground(STOP_FOREGROUND_REMOVE);
+            } else {
+                stopForeground(true);
+            }
+            stopSelf();
+            return;
+        }
         main.post(pollLoop);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        return foregroundReady ? START_STICKY : START_NOT_STICKY;
+        return START_NOT_STICKY;
     }
 
     @Override
