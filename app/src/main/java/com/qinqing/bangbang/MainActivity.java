@@ -69,7 +69,7 @@ public class MainActivity extends Activity {
     private static final int REQUEST_NOTIFICATIONS = 2002;
     private static final int REQUEST_FAMILY_NOTIFICATIONS = 2003;
     private static final String PREFS = "family-assist";
-    private static final String DEFAULT_RELAY_URL = "https://47.238.240.30";
+    private static final String DEFAULT_RELAY_URL = "http://47.238.240.30";
     private static final long FRESH_FRAME_MS = 2500;
     private static final long FAMILY_WAIT_POLL_MS = 1000;
     private static final long FAMILY_ACTIVE_POLL_MS = 520;
@@ -4706,7 +4706,9 @@ public class MainActivity extends Activity {
     }
 
     private String migrateRelayUrl(String value) {
-        if (value != null && value.startsWith("http://47.238.240.30")) {
+        // The current ECS exposes nginx on port 80 only. Do not preserve the
+        // previous HTTPS migration until TLS is actually available on 443.
+        if (value != null && value.startsWith("https://47.238.240.30")) {
             value = DEFAULT_RELAY_URL;
         }
         String normalized = sanitizeRelayUrl(value);
@@ -4726,7 +4728,7 @@ public class MainActivity extends Activity {
                 || normalized.contains("10.0.2.2")
                 || normalized.contains("127.0.0.1")
                 || normalized.contains("localhost")
-                || normalized.startsWith("http://")
+                || (normalized.startsWith("http://") && !DEFAULT_RELAY_URL.equals(normalized))
                 || (normalized.contains(".github.dev") && !normalized.contains(".app.github.dev"))) {
             normalized = DEFAULT_RELAY_URL;
         }
