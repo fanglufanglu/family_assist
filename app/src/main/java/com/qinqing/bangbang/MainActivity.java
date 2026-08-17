@@ -84,6 +84,8 @@ public class MainActivity extends Activity {
     private static final long ACCOUNT_HEARTBEAT_MS = 10_000;
     private static final String PREF_ASSIST_SESSION_ID = "assistSessionId";
     private static final String PREF_MONITOR_SAFE_MODE = "familyMonitorSafeMode";
+    private static final String PREF_MONITOR_RECOVERY_VERSION = "familyMonitorRecoveryVersion";
+    private static final int MONITOR_RECOVERY_VERSION = 2;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService statusIo = Executors.newSingleThreadExecutor();
@@ -269,6 +271,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         configureSystemBars();
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        recoverFamilyMonitorAfterUpgrade();
         baseUrl = migrateRelayUrl(prefs.getString("baseUrl", DEFAULT_RELAY_URL));
         pairCode = prefs.getString("pairCode", "");
         displayName = prefs.getString("displayName", "妈妈");
@@ -541,7 +544,10 @@ public class MainActivity extends Activity {
         root.addView(card("上次运行意外中断", recoveryMessage));
 
         Button retryButton = primaryButton("重新进入");
-        retryButton.setOnClickListener(v -> refreshAccountBeforeRouting(false));
+        retryButton.setOnClickListener(v -> {
+            prefs.edit().putBoolean(PREF_MONITOR_SAFE_MODE, false).commit();
+            refreshAccountBeforeRouting(false);
+        });
         Button logoutButton = secondaryButton("退出当前账号");
         logoutButton.setOnClickListener(v -> logoutLocal());
         root.addView(retryButton);
@@ -1907,7 +1913,7 @@ public class MainActivity extends Activity {
                 JSONObject invitation = result.optJSONObject("invitation");
                 pendingHelpInvitationId = invitation == null ? "" : invitation.optString("id", "");
                 main.post(() -> {
-                    setStatus("已提醒" + memberName + "，等待对方接受。");
+                    setStatus("求助已发送给" + memberName + "，等待对方接受。");
                     if (selectedFamilyHelpButton != null) {
                         selectedFamilyHelpButton.setEnabled(true);
                         selectedFamilyHelpButton.setAlpha(1f);
@@ -2055,11 +2061,18 @@ public class MainActivity extends Activity {
     }
 
     private boolean shouldUseInAppEventPollingOnly() {
-        if (prefs.getBoolean(PREF_MONITOR_SAFE_MODE, false)) {
-            return true;
+        return prefs.getBoolean(PREF_MONITOR_SAFE_MODE, false);
+    }
+
+    private void recoverFamilyMonitorAfterUpgrade() {
+        int recoveryVersion = prefs.getInt(PREF_MONITOR_RECOVERY_VERSION, 0);
+        if (recoveryVersion >= MONITOR_RECOVERY_VERSION) {
+            return;
         }
-        String vendor = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase(Locale.ROOT);
-        return vendor.contains("vivo") || vendor.contains("iqoo");
+        prefs.edit()
+                .putInt(PREF_MONITOR_RECOVERY_VERSION, MONITOR_RECOVERY_VERSION)
+                .putBoolean(PREF_MONITOR_SAFE_MODE, false)
+                .commit();
     }
 
     private void maybeShowFamilyHelpInvitation() {

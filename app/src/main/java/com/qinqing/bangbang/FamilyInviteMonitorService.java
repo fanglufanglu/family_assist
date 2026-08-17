@@ -53,9 +53,7 @@ public class FamilyInviteMonitorService extends Service {
             return;
         }
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        String vendor = (Build.MANUFACTURER + " " + Build.BRAND).toLowerCase(java.util.Locale.ROOT);
-        if (prefs.getBoolean("familyMonitorSafeMode", false)
-                || vendor.contains("vivo") || vendor.contains("iqoo")) {
+        if (prefs.getBoolean("familyMonitorSafeMode", false)) {
             Log.w(TAG, "Persistent monitor disabled for device compatibility");
             if (Build.VERSION.SDK_INT >= 24) {
                 stopForeground(STOP_FOREGROUND_REMOVE);
@@ -340,6 +338,10 @@ public class FamilyInviteMonitorService extends Service {
             return true;
         } catch (RuntimeException error) {
             Log.e(TAG, "Foreground family monitor is unavailable on this device", error);
+            getSharedPreferences(PREFS, MODE_PRIVATE)
+                    .edit()
+                    .putBoolean("familyMonitorSafeMode", true)
+                    .commit();
             return false;
         }
     }
