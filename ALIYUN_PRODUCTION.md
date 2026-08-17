@@ -55,6 +55,8 @@ LE_EMAIL='证书到期通知邮箱' bash scripts/enable-aliyun-ip-https.sh
 
 管理后台位于 `https://服务器地址/admin/`。`ADMIN_PASSWORD` 至少 12 位，必须与 TURN、PostgreSQL 及 APP 账号密码不同，生产环境建议使用至少 20 位随机字符。后台只展示脱敏业务数据，不提供用户屏幕、密码、账号令牌和完整手机号。
 
+用户连接状态按 Relay 最近收到的认证请求计算：20 秒内有请求或 APP 心跳为在线，否则为离线。该状态只保存在 Relay 进程内存中，不向 PostgreSQL 高频写入，也不展示用户 IP。更新 Relay 后需同步发布本版本 APK，未升级的旧版本仍可通过协助轮询刷新连接状态，但在空闲页面的在线判断不如新版本准确。
+
 管理员、TURN 和 PostgreSQL 必须分别使用三个不同密码，不能复用。推荐在服务器上使用 `openssl rand -hex 24` 分别生成，避免特殊字符进入连接字符串后需要额外转义。
 
 管理员登录后可在后台右上角修改密码。修改后的密码哈希保存在 `/var/lib/family-assist-relay/admin-credential.json`，不会写入明文密码。若管理员忘记修改后的密码，可在 ECS 上执行以下命令，删除覆盖凭据并回退到 systemd 中配置的 `ADMIN_PASSWORD`：

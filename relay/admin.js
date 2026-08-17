@@ -243,6 +243,7 @@ function dashboard(snapshot) {
     generatedAt: new Date().toISOString(),
     metrics: {
       users: snapshot.users.length,
+      onlineUsers: snapshot.users.filter((item) => item.connection && item.connection.online).length,
       newUsersToday: snapshot.users.filter((item) => Date.parse(item.createdAt || 0) >= todayStart.getTime()).length,
       elders: snapshot.users.filter((item) => item.appRole === "elder").length,
       relatives: snapshot.users.filter((item) => item.appRole === "family").length,
@@ -353,8 +354,16 @@ function filterUsers(users, query) {
     role: item.appRole || "unselected",
     createdAt: item.createdAt || "",
     lastLoginAt: item.lastLoginAt || "",
+    connectionStatus: item.connection && item.connection.online ? "online" : "offline",
+    lastSeenAt: item.connection ? item.connection.lastSeenAt || "" : "",
+    device: item.connection ? item.connection.device || "" : "",
+    appVersion: item.connection ? item.connection.appVersion || "" : "",
+    connectionSource: item.connection ? item.connection.source || "" : "",
   })).filter((item) => !q || JSON.stringify(item).toLowerCase().includes(q))
-    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    .sort((a, b) => {
+      if (a.connectionStatus !== b.connectionStatus) return a.connectionStatus === "online" ? -1 : 1;
+      return String(b.lastSeenAt || b.createdAt).localeCompare(String(a.lastSeenAt || a.createdAt));
+    });
 }
 
 function diagnostics(snapshot) {

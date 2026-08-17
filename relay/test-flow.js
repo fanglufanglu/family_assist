@@ -11,6 +11,7 @@ const relay = spawn(process.execPath, ["server.js"], {
     RELAY_DATA_DIR: `/tmp/family-assist-relay-test-${process.pid}`,
     RESET_CODE_EXPOSED: "true",
     ELDER_HEARTBEAT_TIMEOUT_MS: "2500",
+    ACCOUNT_ONLINE_TIMEOUT_MS: "500",
     ADMIN_USERNAME: "operator",
     ADMIN_PASSWORD: "admin-test-password",
   },
@@ -164,6 +165,27 @@ async function run() {
     "elder role should persist on the account");
   assert(familyRole.status === 200 && familyRole.body.user.appRole === "family",
     "family role should persist on the account");
+  const onlineUsers = await adminRequest("/admin/api/users", admin);
+  assert(onlineUsers.status === 200
+      && onlineUsers.body.items.filter((item) => item.connectionStatus === "online").length >= 2,
+    "administrator should see recently authenticated users as online");
+  await new Promise((resolve) => setTimeout(resolve, 650));
+  const offlineUsers = await adminRequest("/admin/api/users", admin);
+  assert(offlineUsers.body.items.filter((item) => item.connectionStatus === "online").length === 0,
+    "administrator should see users as offline after the connection window expires");
+  const accountHeartbeatTest = await post("/api/account/heartbeat", {
+    accountToken: elderAccount.body.accountToken,
+    appVersion: "test-version",
+    device: "test-device",
+  });
+  const heartbeatUsers = await adminRequest("/admin/api/users", admin);
+  const heartbeatElder = heartbeatUsers.body.items.find((item) => item.name === "妈妈");
+  const heartbeatDashboard = await adminRequest("/admin/api/dashboard", admin);
+  assert(accountHeartbeatTest.status === 200 && heartbeatElder.connectionStatus === "online"
+      && heartbeatElder.appVersion === "test-version" && heartbeatElder.device === "test-device",
+    "account heartbeat should restore online state and expose safe client metadata");
+  assert(heartbeatDashboard.body.metrics.onlineUsers === 1,
+    "administrator dashboard should summarize currently online accounts");
 
   const resetRegister = await post("/api/account/register", { phone: "13800000003", password: "beforeReset123", name: "测试账号" });
   assert(resetRegister.status === 200, "reset test account should register");

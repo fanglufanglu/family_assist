@@ -15,6 +15,7 @@ const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || "0.0.0.0";
 const families = new Map();
 const users = new Map();
+const userConnections = new Map();
 const MAX_FAMILY_MEMBERS = 5;
 const HELP_INVITE_TTL_MS = 10 * 60 * 1000;
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES || 8 * 1024 * 1024);
@@ -24,6 +25,7 @@ const SAVE_DEBOUNCE_MS = 250;
 const CONTROL_REQUEST_COOLDOWN_MS = 15_000;
 const CONTROL_ACTION_COOLDOWN_MS = 120;
 const ELDER_HEARTBEAT_TIMEOUT_MS = Math.max(1_000, Number(process.env.ELDER_HEARTBEAT_TIMEOUT_MS || 30_000));
+const ACCOUNT_ONLINE_TIMEOUT_MS = Math.max(500, Number(process.env.ACCOUNT_ONLINE_TIMEOUT_MS || 20_000));
 const DATABASE_URL = process.env.DATABASE_URL || process.env.FAMILY_ASSIST_DATABASE_URL || "";
 const STATE_ID = "main";
 const PASSWORD_ITERATIONS = 310000;
@@ -255,6 +257,24 @@ function rotateAccountToken(oldToken, user) {
     }
   }
   return newToken;
+}
+
+function touchAccountConnection(accountToken, detail) {
+  const user = userForToken(accountToken);
+  if (!user || !user.id) return;
+  const previous = userConnections.get(user.id) || {};
+  const now = Date.now();
+  const next = {
+    ...previous,
+    lastSeenAtMs: now,
+    lastSeenAt: new Date(now).toISOString(),
+    source: String((detail && detail.source) || previous.source || "app").slice(0, 32),
+  };
+  for (const key of ["device", "appVersion", "appRole"]) {
+    const value = String((detail && detail[key]) || "").trim();
+    if (value) next[key] = value.slice(0, key === "device" ? 80 : 32);
+  }
+  userConnections.set(user.id, next);
 }
 
 function hashPassword(password, salt) {
@@ -490,6 +510,12 @@ function requireMember(res, pairCode, authToken, role) {
   if (!family || !member || (role && member.role !== role)) {
     sendJson(res, 403, { error: "not bound" });
     return null;
+  }
+  if (member.accountToken) {
+    touchAccountConnection(member.accountToken, {
+      source: family.active ? "assist" : "family_events",
+      appRole: member.role,
+    });
   }
   expireStaleSession(family);
   return { family, member };
@@ -759,6 +785,15 @@ function adminSnapshot() {
     delete safeUser.passwordHash;
     delete safeUser.passwordReset;
     delete safeUser.accountToken;
+    const connection = userConnections.get(user.id) || null;
+    safeUser.connection = connection ? {
+      online: Date.now() - Number(connection.lastSeenAtMs || 0) <= ACCOUNT_ONLINE_TIMEOUT_MS,
+      lastSeenAt: connection.lastSeenAt || "",
+      source: connection.source || "",
+      device: connection.device || "",
+      appVersion: connection.appVersion || "",
+      appRole: connection.appRole || "",
+    } : null;
     uniqueUsers.set(user.id, safeUser);
   }
   const familyEntries = [...families.entries()].map(([pairCode, family]) => ({ pairCode, family }));
@@ -789,6 +824,7 @@ function adminSnapshot() {
       postgres: Boolean(pgPool),
       turnConfigured: Boolean(process.env.TURN_URLS),
       uptimeSeconds: Math.round(process.uptime()),
+      accountOnlineTimeoutMs: ACCOUNT_ONLINE_TIMEOUT_MS,
     },
   };
 }
@@ -867,6 +903,7 @@ const server = http.createServer(async (req, res) => {
         lastLoginAt: nowIso,
       };
       users.set(accountToken, user);
+      touchAccountConnection(accountToken, { source: "account", appRole: user.appRole });
       clearRateLimit(limitKey);
       scheduleSave();
       sendJson(res, 200, { ok: true, accountToken, user: publicUser(user), memberships: [] });
@@ -901,6 +938,7 @@ const server = http.createServer(async (req, res) => {
       const nowIso = new Date().toISOString();
       user.lastLoginAt = nowIso;
       users.set(accountToken, user);
+      touchAccountConnection(accountToken, { source: "account", appRole: user.appRole });
       scheduleSave();
       sendJson(res, 200, {
         ok: true,
@@ -1026,6 +1064,7 @@ const server = http.createServer(async (req, res) => {
           .filter((item) => item.accountToken !== accountToken);
         family.updatedAt = new Date().toISOString();
       }
+      if (user.id) userConnections.delete(user.id);
       users.delete(accountToken);
       await saveStateNow();
       sendJson(res, 200, { ok: true });
@@ -1039,11 +1078,30 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 403, { error: "not logged in" });
         return;
       }
+      touchAccountConnection(accountToken, { source: "account", appRole: user.appRole });
       sendJson(res, 200, {
         ok: true,
         user: publicUser(user),
         memberships: membershipsForAccount(accountToken),
       });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/account/heartbeat") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const accountToken = String(payload.accountToken || "").trim();
+      const user = userForToken(accountToken);
+      if (!user) {
+        sendJson(res, 403, { error: "not logged in" });
+        return;
+      }
+      touchAccountConnection(accountToken, {
+        source: "app_heartbeat",
+        device: payload.device,
+        appVersion: payload.appVersion,
+        appRole: user.appRole,
+      });
+      sendJson(res, 200, { ok: true, serverTime: new Date().toISOString() });
       return;
     }
 

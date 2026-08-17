@@ -81,6 +81,7 @@ public class MainActivity extends Activity {
     private static final long ANNOTATION_THROTTLE_MS = 850;
     private static final long RTC_STALE_FRAME_MS = 3200;
     private static final long RTC_FRAME_SAMPLE_MS = 180;
+    private static final long ACCOUNT_HEARTBEAT_MS = 10_000;
     private static final String PREF_ASSIST_SESSION_ID = "assistSessionId";
     private static final String PREF_MONITOR_SAFE_MODE = "familyMonitorSafeMode";
 
@@ -205,6 +206,7 @@ public class MainActivity extends Activity {
     private boolean inviteInProgress;
     private boolean bindInProgress;
     private volatile boolean accountRequestInProgress;
+    private volatile boolean accountHeartbeatInFlight;
     private boolean remoteRequestInProgress;
     private boolean familyEnding;
     private long lastAnnotationSentAtMs;
@@ -236,6 +238,14 @@ public class MainActivity extends Activity {
             if (pendingHelpInvitationId.isEmpty()) return;
             pollSelectedHelpInvitation();
             main.postDelayed(this, 1000);
+        }
+    };
+    private final Runnable accountHeartbeatLoop = new Runnable() {
+        @Override
+        public void run() {
+            if (!appInForeground || accountToken == null || accountToken.isEmpty()) return;
+            sendAccountHeartbeat();
+            main.postDelayed(this, ACCOUNT_HEARTBEAT_MS);
         }
     };
 
@@ -299,6 +309,7 @@ public class MainActivity extends Activity {
         main.removeCallbacks(elderBindLoopRunnable);
         main.removeCallbacks(familyBindPendingLoopRunnable);
         main.removeCallbacks(selectedHelpInvitePollLoop);
+        main.removeCallbacks(accountHeartbeatLoop);
         familyPolling = false;
         elderAnnotationPolling = false;
         elderBindPolling = false;
@@ -314,6 +325,8 @@ public class MainActivity extends Activity {
         super.onResume();
         appInForeground = true;
         prefs.edit().putBoolean("appForeground", true).commit();
+        main.removeCallbacks(accountHeartbeatLoop);
+        if (isLoggedIn()) main.post(accountHeartbeatLoop);
         main.removeCallbacks(assistEndedUiLoop);
         maybeShowAssistEndedEvent();
         maybeShowPeerEvent();
@@ -362,6 +375,7 @@ public class MainActivity extends Activity {
     protected void onPause() {
         appInForeground = false;
         main.removeCallbacks(assistEndedUiLoop);
+        main.removeCallbacks(accountHeartbeatLoop);
         prefs.edit().putBoolean("appForeground", false).commit();
         super.onPause();
     }
@@ -2008,6 +2022,24 @@ public class MainActivity extends Activity {
                 setStatus("系统暂时无法开启后台提醒。你仍可在亲情帮帮内正常使用协助功能。");
             }
         }
+    }
+
+    private void sendAccountHeartbeat() {
+        if (accountHeartbeatInFlight || accountToken == null || accountToken.isEmpty()) return;
+        accountHeartbeatInFlight = true;
+        statusIo.execute(() -> {
+            try {
+                NetworkClient.postJson(baseUrl, "/api/account/heartbeat", new JSONObject()
+                        .put("accountToken", accountToken)
+                        .put("appRole", selectedAppRole)
+                        .put("appVersion", appVersionText())
+                        .put("device", (Build.MANUFACTURER + " " + Build.MODEL).trim()));
+            } catch (Exception error) {
+                Log.d(TAG, "Account heartbeat unavailable", error);
+            } finally {
+                accountHeartbeatInFlight = false;
+            }
+        });
     }
 
     private void ensureFamilyInviteNotifications() {
