@@ -391,7 +391,8 @@ public class MainActivity extends Activity {
             super.onBackPressed();
         } else if ("register".equals(currentPage) || "forgotPassword".equals(currentPage)) {
             showLogin("auth");
-        } else if ("settings".equals(currentPage) || "privacy".equals(currentPage) || "relatives".equals(currentPage)) {
+        } else if ("settings".equals(currentPage) || "profileName".equals(currentPage)
+                || "privacy".equals(currentPage) || "relatives".equals(currentPage)) {
             showProfile();
         } else if ("elderFamily".equals(currentPage)) {
             showElder();
@@ -654,12 +655,14 @@ public class MainActivity extends Activity {
         status.setVisibility(View.GONE);
 
         TextView accountButton = settingsRow("退出登录", "退出当前设备，不会删除亲属关系");
+        TextView nameButton = settingsRow("个人称呼", displayName);
         TextView roleButton = settingsRow("使用身份", "当前为" + roleDisplayName(selectedAppRole) + "，身份跟随账号保存");
         TextView safetyButton = settingsRow("安全与权限", "管理画圈、敏感保护和远程操作");
         TextView privacyButton = settingsRow("隐私政策", "了解信息如何被使用和保护");
         TextView deleteButton = settingsRow("注销账号", "永久删除账号和相关绑定");
 
         accountButton.setOnClickListener(v -> confirmLogout());
+        nameButton.setOnClickListener(v -> showEditProfileName());
         roleButton.setOnClickListener(v -> showRoleSwitchGuide());
         safetyButton.setOnClickListener(v -> {
             if (isBoundAs("elder")) {
@@ -676,6 +679,7 @@ public class MainActivity extends Activity {
         }
 
         LinearLayout familySettings = card("家庭与身份", "");
+        familySettings.addView(nameButton);
         familySettings.addView(roleButton);
         root.addView(familySettings);
 
@@ -696,6 +700,79 @@ public class MainActivity extends Activity {
         root.addView(status);
         root.addView(bottomNav("profile"));
         setContentView(scroll(root));
+    }
+
+    private void showEditProfileName() {
+        currentPage = "profileName";
+        familyPolling = false;
+        elderAnnotationPolling = false;
+        elderBindPolling = false;
+        root = verticalRoot();
+        root.addView(pageHeader("修改个人称呼", this::showProfile));
+        status = notice("");
+        status.setVisibility(View.GONE);
+
+        EditText nameInput = input("例如 妈妈、爸爸、女儿", displayName);
+        nameInput.setSingleLine(true);
+        nameInput.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(20)});
+        nameInput.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        Button saveButton = primaryButton("保存称呼");
+        saveButton.setOnClickListener(v -> updateProfileName(nameInput.getText().toString(), saveButton));
+        nameInput.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                saveButton.performClick();
+                return true;
+            }
+            return false;
+        });
+
+        LinearLayout form = card("家人如何称呼你", "修改后，已绑定的家人也会看到新称呼。");
+        form.addView(label("个人称呼"));
+        form.addView(nameInput);
+        form.addView(status);
+        form.addView(saveButton);
+        root.addView(form);
+        root.addView(bottomNav("profile"));
+        setContentView(scroll(root));
+        nameInput.requestFocus();
+    }
+
+    private void updateProfileName(String rawName, Button sourceButton) {
+        String name = rawName == null ? "" : rawName.trim();
+        if (name.isEmpty()) {
+            setStatus("请输入家人容易认出的称呼。");
+            return;
+        }
+        if (name.equals(displayName)) {
+            showProfile();
+            return;
+        }
+        setButtonBusy(sourceButton, "正在保存...");
+        statusIo.execute(() -> {
+            try {
+                JSONObject result = NetworkClient.postJson(baseUrl, "/api/account/profile", new JSONObject()
+                        .put("accountToken", accountToken)
+                        .put("name", name));
+                JSONObject user = result.optJSONObject("user");
+                displayName = user == null ? name : user.optString("name", name);
+                JSONArray memberships = result.optJSONArray("memberships");
+                accountMembershipsJson = memberships == null ? "[]" : memberships.toString();
+                prefs.edit()
+                        .putString("displayName", displayName)
+                        .putString("accountMemberships", accountMembershipsJson)
+                        .apply();
+                restoreMembershipForRole(selectedAppRole);
+                main.post(() -> {
+                    showProfile();
+                    setStatus("个人称呼已更新。");
+                });
+            } catch (Exception error) {
+                main.post(() -> {
+                    restoreButton(sourceButton);
+                    setStatus(friendlyError(error));
+                });
+            }
+        });
     }
 
     private String roleDisplayName(String role) {

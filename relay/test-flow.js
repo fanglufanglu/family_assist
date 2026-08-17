@@ -242,6 +242,25 @@ async function run() {
     && relativesStatus.body.family.familyMembers[0].name === "女儿"
     && relativesStatus.body.family.familyMembers[0].ref,
   "elder should receive a safe list of bound relatives");
+  const renamedFamily = await post("/api/account/profile", {
+    accountToken: familyAccount.body.accountToken,
+    name: "姐姐",
+  });
+  const renamedStatus = await get(`/api/bind/status?pairCode=${securePairCode}&authToken=${secureInvite.body.authToken}`);
+  assert(renamedFamily.status === 200 && renamedFamily.body.user.name === "姐姐"
+      && renamedStatus.body.family.familyMembers[0].name === "姐姐",
+    "changing an account name should update the bound relative list");
+  const restoredFamilyName = await post("/api/account/profile", {
+    accountToken: familyAccount.body.accountToken,
+    name: "女儿",
+  });
+  assert(restoredFamilyName.status === 200 && restoredFamilyName.body.memberships[0].name === "女儿",
+    "profile updates should return refreshed memberships");
+  const rejectedEmptyName = await post("/api/account/profile", {
+    accountToken: familyAccount.body.accountToken,
+    name: " ",
+  });
+  assert(rejectedEmptyName.status === 400, "account name must not be empty");
   assert(Array.isArray(secureInvite.body.familyMembers) && secureInvite.body.familyMembers.length === 0,
     "new invite should expose the elder's baseline family list");
   const cancellableHelpInvite = await post("/api/help/invite", {

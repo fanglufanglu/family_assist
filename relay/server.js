@@ -1047,6 +1047,56 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/account/profile") {
+      const payload = JSON.parse((await readBody(req)).toString("utf8"));
+      const accountToken = String(payload.accountToken || "").trim();
+      const name = String(payload.name || "").trim();
+      const user = userForToken(accountToken);
+      if (!user) {
+        sendJson(res, 403, { error: "not logged in" });
+        return;
+      }
+      if (!name || name.length > 20 || /[\r\n\t]/.test(name)) {
+        sendJson(res, 400, { error: "valid account name is required" });
+        return;
+      }
+      user.name = name;
+      user.profileUpdatedAt = new Date().toISOString();
+      for (const family of families.values()) {
+        for (const [authToken, member] of family.members.entries()) {
+          if (member.accountToken !== accountToken) continue;
+          member.name = name;
+          const ref = memberReference(authToken, member);
+          if (member.role === "elder") {
+            family.elderName = name;
+            if (family.pendingHelpInvitation) family.pendingHelpInvitation.elderName = name;
+            if (family.pendingFamilyAssistRequest) family.pendingFamilyAssistRequest.elderName = name;
+          } else {
+            if (family.activeHelperToken === authToken) family.activeHelperName = name;
+            if (family.targetHelperRef === ref) family.targetHelperName = name;
+            if (family.pendingHelpInvitation && family.pendingHelpInvitation.targetHelperRef === ref) {
+              family.pendingHelpInvitation.targetHelperName = name;
+            }
+            if (family.pendingFamilyAssistRequest && family.pendingFamilyAssistRequest.helperRef === ref) {
+              family.pendingFamilyAssistRequest.helperName = name;
+            }
+          }
+          family.updatedAt = user.profileUpdatedAt;
+          audit(family, "account_name_updated", { role: member.role });
+        }
+        for (const request of family.pendingBindRequests || []) {
+          if (request.accountToken === accountToken) request.requesterName = name;
+        }
+      }
+      scheduleSave();
+      sendJson(res, 200, {
+        ok: true,
+        user: publicUser(user),
+        memberships: membershipsForAccount(accountToken),
+      });
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/account/role") {
       const payload = JSON.parse((await readBody(req)).toString("utf8"));
       const accountToken = String(payload.accountToken || "").trim();
