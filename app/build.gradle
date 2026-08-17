@@ -58,6 +58,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix ".debug"
+            versionNameSuffix "-debug"
+            resValue "string", "app_name", "亲情帮帮 Debug"
+        }
         release {
             signingConfig releaseSigningConfigured ? signingConfigs.release : null
             minifyEnabled false
