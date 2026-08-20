@@ -2039,6 +2039,7 @@ public class MainActivity extends Activity {
                         .put("accountToken", accountToken)
                         .put("appRole", selectedAppRole)
                         .put("appVersion", appVersionText())
+                        .put("deviceId", deviceId)
                         .put("device", (Build.MANUFACTURER + " " + Build.MODEL).trim()));
             } catch (Exception error) {
                 Log.d(TAG, "Account heartbeat unavailable", error);
@@ -2996,7 +2997,10 @@ public class MainActivity extends Activity {
             try {
                 JSONObject payload = new JSONObject()
                         .put("phone", phone)
-                        .put("password", password);
+                        .put("password", password)
+                        .put("deviceId", deviceId)
+                        .put("device", (Build.MANUFACTURER + " " + Build.MODEL).trim())
+                        .put("appVersion", appVersionText());
                 if (register) {
                     payload.put("name", finalName);
                 }

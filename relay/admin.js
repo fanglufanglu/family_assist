@@ -243,7 +243,9 @@ function dashboard(snapshot) {
     generatedAt: new Date().toISOString(),
     metrics: {
       users: snapshot.users.length,
-      onlineUsers: snapshot.users.filter((item) => item.connection && item.connection.online).length,
+      onlineUsers: snapshot.users.filter((item) =>
+        (item.connections || []).some((connection) => connection.online)
+      ).length,
       newUsersToday: snapshot.users.filter((item) => Date.parse(item.createdAt || 0) >= todayStart.getTime()).length,
       elders: snapshot.users.filter((item) => item.appRole === "elder").length,
       relatives: snapshot.users.filter((item) => item.appRole === "family").length,
@@ -347,19 +349,30 @@ function sessionRows(snapshot) {
 
 function filterUsers(users, query) {
   const q = String(query || "").trim().toLowerCase();
-  return users.map((item) => ({
-    id: item.id || publicId(item.phone),
-    name: item.name || "用户",
-    phone: maskPhone(item.phone),
-    role: item.appRole || "unselected",
-    createdAt: item.createdAt || "",
-    lastLoginAt: item.lastLoginAt || "",
-    connectionStatus: item.connection && item.connection.online ? "online" : "offline",
-    lastSeenAt: item.connection ? item.connection.lastSeenAt || "" : "",
-    device: item.connection ? item.connection.device || "" : "",
-    appVersion: item.connection ? item.connection.appVersion || "" : "",
-    connectionSource: item.connection ? item.connection.source || "" : "",
-  })).filter((item) => !q || JSON.stringify(item).toLowerCase().includes(q))
+  return users.map((item) => {
+    const devices = (item.connections || []).map((connection) => ({
+      id: connection.id || "",
+      connectionStatus: connection.online ? "online" : "offline",
+      lastSeenAt: connection.lastSeenAt || "",
+      device: connection.device || "",
+      appVersion: connection.appVersion || "",
+      role: connection.appRole || "",
+    }));
+    const onlineDeviceCount = devices.filter((device) => device.connectionStatus === "online").length;
+    return {
+      id: item.id || publicId(item.phone),
+      name: item.name || "用户",
+      phone: maskPhone(item.phone),
+      role: item.appRole || "unselected",
+      createdAt: item.createdAt || "",
+      lastLoginAt: item.lastLoginAt || "",
+      connectionStatus: onlineDeviceCount ? "online" : "offline",
+      onlineDeviceCount,
+      deviceCount: devices.length,
+      lastSeenAt: devices[0] ? devices[0].lastSeenAt : "",
+      devices,
+    };
+  }).filter((item) => !q || JSON.stringify(item).toLowerCase().includes(q))
     .sort((a, b) => {
       if (a.connectionStatus !== b.connectionStatus) return a.connectionStatus === "online" ? -1 : 1;
       return String(b.lastSeenAt || b.createdAt).localeCompare(String(a.lastSeenAt || a.createdAt));

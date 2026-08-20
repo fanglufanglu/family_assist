@@ -262,19 +262,38 @@ function rotateAccountToken(oldToken, user) {
 function touchAccountConnection(accountToken, detail) {
   const user = userForToken(accountToken);
   if (!user || !user.id) return;
-  const previous = userConnections.get(user.id) || {};
+  const safeDetail = detail || {};
+  const rawDeviceId = String(safeDetail.deviceId || "").trim();
+  const device = String(safeDetail.device || "").trim().slice(0, 80);
+  const connectionKey = rawDeviceId
+    ? `device:${rawDeviceId.slice(0, 128)}`
+    : device ? `legacy:${device}` : "";
+  if (!connectionKey) return;
+  let connections = userConnections.get(user.id);
+  if (!(connections instanceof Map)) {
+    connections = new Map();
+    userConnections.set(user.id, connections);
+  }
+  const previous = connections.get(connectionKey) || {};
   const now = Date.now();
   const next = {
     ...previous,
+    id: crypto.createHash("sha256").update(connectionKey).digest("hex").slice(0, 12),
     lastSeenAtMs: now,
     lastSeenAt: new Date(now).toISOString(),
-    source: String((detail && detail.source) || previous.source || "app").slice(0, 32),
+    source: String(safeDetail.source || previous.source || "app").slice(0, 32),
   };
   for (const key of ["device", "appVersion", "appRole"]) {
-    const value = String((detail && detail[key]) || "").trim();
+    const value = String(safeDetail[key] || "").trim();
     if (value) next[key] = value.slice(0, key === "device" ? 80 : 32);
   }
-  userConnections.set(user.id, next);
+  connections.set(connectionKey, next);
+  if (connections.size > 10) {
+    const oldest = [...connections.entries()]
+      .sort((a, b) => Number(b[1].lastSeenAtMs || 0) - Number(a[1].lastSeenAtMs || 0))
+      .slice(10);
+    for (const [key] of oldest) connections.delete(key);
+  }
 }
 
 function hashPassword(password, salt) {
@@ -515,6 +534,7 @@ function requireMember(res, pairCode, authToken, role) {
     touchAccountConnection(member.accountToken, {
       source: family.active ? "assist" : "family_events",
       appRole: member.role,
+      deviceId: member.deviceId,
     });
   }
   expireStaleSession(family);
@@ -785,15 +805,20 @@ function adminSnapshot() {
     delete safeUser.passwordHash;
     delete safeUser.passwordReset;
     delete safeUser.accountToken;
-    const connection = userConnections.get(user.id) || null;
-    safeUser.connection = connection ? {
+    const storedConnections = userConnections.get(user.id);
+    const connections = storedConnections instanceof Map
+      ? [...storedConnections.values()]
+      : storedConnections ? [storedConnections] : [];
+    safeUser.connections = connections.map((connection) => ({
+      id: connection.id || "legacy",
       online: Date.now() - Number(connection.lastSeenAtMs || 0) <= ACCOUNT_ONLINE_TIMEOUT_MS,
       lastSeenAt: connection.lastSeenAt || "",
       source: connection.source || "",
       device: connection.device || "",
       appVersion: connection.appVersion || "",
       appRole: connection.appRole || "",
-    } : null;
+    })).sort((a, b) => String(b.lastSeenAt).localeCompare(String(a.lastSeenAt)));
+    safeUser.connection = safeUser.connections[0] || null;
     uniqueUsers.set(user.id, safeUser);
   }
   const familyEntries = [...families.entries()].map(([pairCode, family]) => ({ pairCode, family }));
@@ -903,7 +928,13 @@ const server = http.createServer(async (req, res) => {
         lastLoginAt: nowIso,
       };
       users.set(accountToken, user);
-      touchAccountConnection(accountToken, { source: "account", appRole: user.appRole });
+      touchAccountConnection(accountToken, {
+        source: "account",
+        appRole: user.appRole,
+        deviceId: payload.deviceId,
+        device: payload.device,
+        appVersion: payload.appVersion,
+      });
       clearRateLimit(limitKey);
       scheduleSave();
       sendJson(res, 200, { ok: true, accountToken, user: publicUser(user), memberships: [] });
@@ -938,7 +969,13 @@ const server = http.createServer(async (req, res) => {
       const nowIso = new Date().toISOString();
       user.lastLoginAt = nowIso;
       users.set(accountToken, user);
-      touchAccountConnection(accountToken, { source: "account", appRole: user.appRole });
+      touchAccountConnection(accountToken, {
+        source: "account",
+        appRole: user.appRole,
+        deviceId: payload.deviceId,
+        device: payload.device,
+        appVersion: payload.appVersion,
+      });
       scheduleSave();
       sendJson(res, 200, {
         ok: true,
@@ -1097,6 +1134,7 @@ const server = http.createServer(async (req, res) => {
       }
       touchAccountConnection(accountToken, {
         source: "app_heartbeat",
+        deviceId: payload.deviceId,
         device: payload.device,
         appVersion: payload.appVersion,
         appRole: user.appRole,

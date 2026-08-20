@@ -143,12 +143,12 @@ async function run() {
   assert(oldAdminLogin.status === 403 && newAdminLogin.status === 200,
     "only the new administrator password should work after a change");
   const pairCode = "regression001";
-  const elderRegister = await post("/api/account/register", { phone: "13800000001", password: "elderPass123", name: "妈妈" });
-  const familyRegister = await post("/api/account/register", { phone: "13800000002", password: "familyPass123", name: "女儿" });
+  const elderRegister = await post("/api/account/register", { phone: "13800000001", password: "elderPass123", name: "妈妈", deviceId: "elder-phone-1", device: "Test Elder Phone", appVersion: "test-version" });
+  const familyRegister = await post("/api/account/register", { phone: "13800000002", password: "familyPass123", name: "女儿", deviceId: "family-phone-1", device: "Test Family Phone", appVersion: "test-version" });
   assert(elderRegister.status === 200 && elderRegister.body.accountToken, "elder account should register");
   assert(familyRegister.status === 200 && familyRegister.body.accountToken, "family account should register");
-  const elderAccount = await post("/api/account/login", { phone: "13800000001", password: "elderPass123", name: "妈妈" });
-  const familyAccount = await post("/api/account/login", { phone: "13800000002", password: "familyPass123", name: "女儿" });
+  const elderAccount = await post("/api/account/login", { phone: "13800000001", password: "elderPass123", name: "妈妈", deviceId: "elder-phone-1", device: "Test Elder Phone", appVersion: "test-version" });
+  const familyAccount = await post("/api/account/login", { phone: "13800000002", password: "familyPass123", name: "女儿", deviceId: "family-phone-1", device: "Test Family Phone", appVersion: "test-version" });
   assert(elderAccount.status === 200 && elderAccount.body.accountToken, "elder account should log in with password");
   assert(familyAccount.status === 200 && familyAccount.body.accountToken, "family account should log in with password");
   assert(elderAccount.body.user.appRole === "" && familyAccount.body.user.appRole === "",
@@ -177,13 +177,24 @@ async function run() {
     accountToken: elderAccount.body.accountToken,
     appVersion: "test-version",
     device: "test-device",
+    deviceId: "elder-phone-1",
+  });
+  const secondDeviceHeartbeat = await post("/api/account/heartbeat", {
+    accountToken: elderAccount.body.accountToken,
+    appVersion: "second-version",
+    device: "second-device",
+    deviceId: "elder-phone-2",
   });
   const heartbeatUsers = await adminRequest("/admin/api/users", admin);
   const heartbeatElder = heartbeatUsers.body.items.find((item) => item.name === "妈妈");
   const heartbeatDashboard = await adminRequest("/admin/api/dashboard", admin);
-  assert(accountHeartbeatTest.status === 200 && heartbeatElder.connectionStatus === "online"
-      && heartbeatElder.appVersion === "test-version" && heartbeatElder.device === "test-device",
-    "account heartbeat should restore online state and expose safe client metadata");
+  assert(accountHeartbeatTest.status === 200 && secondDeviceHeartbeat.status === 200
+      && heartbeatElder.connectionStatus === "online" && heartbeatElder.onlineDeviceCount === 2
+      && heartbeatElder.deviceCount === 2
+      && heartbeatElder.devices.some((item) => item.device === "test-device" && item.appVersion === "test-version")
+      && heartbeatElder.devices.some((item) => item.device === "second-device" && item.appVersion === "second-version")
+      && !JSON.stringify(heartbeatElder).includes("elder-phone-"),
+    "account heartbeat should keep same-account devices separate and expose safe client metadata");
   assert(heartbeatDashboard.body.metrics.onlineUsers === 1,
     "administrator dashboard should summarize currently online accounts");
 
