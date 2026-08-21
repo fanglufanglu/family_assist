@@ -84,3 +84,154 @@ android {
 dependencies {
     implementation "io.github.webrtc-sdk:android:144.7559.09"
 }
+
+tasks.register("verifyLegacyAndroidApiCompatibility") {
+    doLast {
+        def violations = []
+        fileTree("src/main/java").matching { include "**/*.java" }.each { sourceFile ->
+            sourceFile.eachLine { line, lineNumber ->
+                if (line.contains("URLEncoder.encode") && line.contains("StandardCharsets.UTF_8)")) {
+                    violations << "${sourceFile}:${lineNumber}"
+                }
+            }
+        }
+        if (!violations.isEmpty()) {
+            throw new GradleException(
+                    "URLEncoder.encode(String, Charset) is unavailable on older Android versions. " +
+                            "Use StandardCharsets.UTF_8.name() instead:\n${violations.join('\n')}"
+            )
+        }
+    }
+}
+
+tasks.matching { it.name == "preBuild" }.configureEach {
+    dependsOn("verifyLegacyAndroidApiCompatibility")
+}
+
+// Some vendor installers still inspect the legacy JAR certificate even when the
+// app's minSdk supports modern APK signing. Re-sign and verify every release
+// against an older verification floor so an APK without v1 can never ship.
+afterEvaluate {
+    tasks.register("resignReleaseV1") {
+        onlyIf { releaseSigningConfigured }
+        doLast {
+            def apksigner = file("${android.sdkDirectory}/build-tools/${android.buildToolsVersion}/apksigner")
+            def zipalign = file("${android.sdkDirectory}/build-tools/${android.buildToolsVersion}/zipalign")
+            if (!apksigner.exists()) {
+                throw new GradleException("apksigner not found at ${apksigner.absolutePath}")
+            }
+            if (!zipalign.exists()) {
+                throw new GradleException("zipalign not found at ${zipalign.absolutePath}")
+            }
+
+            def releaseApk = file("$buildDir/outputs/apk/release/app-release.apk")
+            if (!releaseApk.exists()) {
+                throw new GradleException("Release APK not found at ${releaseApk.absolutePath}")
+            }
+
+            def stagingApk = file("$buildDir/outputs/apk/release/app-release-v1-staging.apk")
+            project.copy {
+                from releaseApk
+                into stagingApk.parentFile
+                rename { stagingApk.name }
+            }
+
+            def runCommand = { String label, List command, Map environment ->
+                def builder = new ProcessBuilder(command.collect { it.toString() })
+                        .redirectErrorStream(true)
+                builder.environment().putAll(environment)
+                def process = builder.start()
+                def output = process.inputStream.getText("UTF-8")
+                def exitCode = process.waitFor()
+                if (exitCode != 0) {
+                    throw new GradleException("${label} failed (${exitCode})\n${output}")
+                }
+                output
+            }
+
+            def signingEnvironment = [
+                    "FAMILY_ASSIST_APKSIGNER_STORE_PASSWORD": releaseStorePassword,
+                    "FAMILY_ASSIST_APKSIGNER_KEY_PASSWORD"  : releaseKeyPassword
+            ]
+            runCommand("APK signing", [
+                    apksigner.absolutePath,
+                    "sign",
+                    "--v1-signing-enabled", "true",
+                    "--v2-signing-enabled", "true",
+                    "--v3-signing-enabled", "true",
+                    "--min-sdk-version", "19",
+                    "--ks", releaseStoreFile,
+                    "--ks-key-alias", releaseKeyAlias,
+                    "--ks-pass", "env:FAMILY_ASSIST_APKSIGNER_STORE_PASSWORD",
+                    "--key-pass", "env:FAMILY_ASSIST_APKSIGNER_KEY_PASSWORD",
+                    "--out", releaseApk.absolutePath,
+                    stagingApk.absolutePath
+            ], signingEnvironment)
+
+            def verification = runCommand("APK signature verification", [
+                    apksigner.absolutePath,
+                    "verify",
+                    "--verbose",
+                    "--print-certs",
+                    "--min-sdk-version", "19",
+                    releaseApk.absolutePath
+            ], [:])
+            [
+                    "Verified using v1 scheme (JAR signing): true",
+                    "Verified using v2 scheme (APK Signature Scheme v2): true",
+                    "Verified using v3 scheme (APK Signature Scheme v3): true"
+            ].each { expected ->
+                if (!verification.contains(expected)) {
+                    throw new GradleException("Release APK is missing a required signature: ${expected}")
+                }
+            }
+            runCommand("APK alignment verification", [
+                    zipalign.absolutePath,
+                    "-c",
+                    "-P", "16",
+                    "4",
+                    releaseApk.absolutePath
+            ], [:])
+
+            def jarCertificatePresent = false
+            def zipFile = new java.util.zip.ZipFile(releaseApk)
+            try {
+                jarCertificatePresent = zipFile.entries().find { entry ->
+                    entry.name ==~ "META-INF/[^/]+\\.(RSA|DSA|EC)"
+                } != null
+            } finally {
+                zipFile.close()
+            }
+            if (!jarCertificatePresent) {
+                throw new GradleException("Release APK does not contain a legacy JAR certificate")
+            }
+
+            def releaseName = "qinqing-bangbang-${android.defaultConfig.versionName}-release.apk"
+            def publishedApk = file("${releaseApk.parent}/${releaseName}")
+            project.copy {
+                from releaseApk
+                into publishedApk.parentFile
+                rename { publishedApk.name }
+            }
+            def digest = java.security.MessageDigest.getInstance("SHA-256")
+            publishedApk.withInputStream { input ->
+                byte[] buffer = new byte[8192]
+                int count
+                while ((count = input.read(buffer)) > 0) {
+                    digest.update(buffer, 0, count)
+                }
+            }
+            def sha256 = digest.digest().collect { String.format("%02x", it & 0xff) }.join()
+            file("${publishedApk.absolutePath}.sha256").text = "${sha256}  ${publishedApk.name}\n"
+
+            stagingApk.delete()
+            delete file("$buildDir/outputs/apk/release/app-release.apk.idsig")
+            logger.lifecycle("Verified release APK: ${publishedApk.absolutePath}")
+            logger.lifecycle("SHA-256: ${sha256}")
+        }
+    }
+
+    tasks.matching { it.name == "assembleRelease" }.configureEach {
+        finalizedBy("resignReleaseV1")
+    }
+}

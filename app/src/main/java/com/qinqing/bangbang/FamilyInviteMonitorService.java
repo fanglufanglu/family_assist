@@ -307,8 +307,8 @@ public class FamilyInviteMonitorService extends Service {
         }
     }
 
-    private String encoded(String value) {
-        return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    private String encoded(String value) throws Exception {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8.name());
     }
 
     private void createChannel() {
